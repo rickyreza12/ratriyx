@@ -1,0 +1,10 @@
+[package]
+name = "ratriyx"
+version = "0.1.0"
+edition = "2021"
+description = "Per-process privacy routing through existing Tor and Privoxy, for Ubuntu on WSL2"
+publish = false
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[dependencies]
