@@ -443,4 +443,20 @@ mod tests {
         let err = rotate(&cfg, Path::new("/nonexistent/rotate.last"), 0, false).unwrap_err();
         assert_eq!(err.exit_code(), 5);
     }
+
+    #[test]
+    fn rotate_state_dir_failure_sends_no_newnym() {
+        let cfg = Config {
+            tor_control_enabled: true,
+            ..Config::default()
+        };
+        let err = rotate(
+            &cfg,
+            Path::new("/proc/ratriyx-nope/rotate.last"),
+            1000,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.exit_code(), 1);
+    }
 }

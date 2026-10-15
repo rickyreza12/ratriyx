@@ -14,11 +14,11 @@ USAGE:
   ratriyx on  [--shell bash|zsh|fish|powershell] [--session NAME]
   ratriyx off [--shell bash|zsh|fish|powershell] [--session NAME]
   ratriyx recover --target direct|tor [--dry-run] [--apply] [--yes]
-  ratriyx setup --dry-run
+  ratriyx setup [--dry-run|--install [--yes]]
   ratriyx configure [--dry-run] [--yes] [--restart] [--file PATH]
   ratriyx service start|stop|restart|status [tor|privoxy] [--yes]
   ratriyx restore [--file PATH] [--yes]
-  ratriyx uninstall [--yes]
+  ratriyx uninstall [--yes] [--remove-managed]
   ratriyx rotate [--yes]
   ratriyx config migrate [--yes]
   ratriyx --help | --version
@@ -67,7 +67,10 @@ pub enum Command {
         apply: bool,
         yes: bool,
     },
-    Setup,
+    Setup {
+        install: bool,
+        yes: bool,
+    },
     Configure {
         dry_run: bool,
         yes: bool,
@@ -85,6 +88,7 @@ pub enum Command {
     },
     Uninstall {
         yes: bool,
+        remove_managed: bool,
     },
     Rotate {
         yes: bool,
@@ -243,19 +247,26 @@ pub fn parse(args: &[String]) -> Result<Command> {
             Ok(Command::Recover { target, apply, yes })
         }
         "setup" => {
-            let mut dry_run = false;
+            let (mut dry_run, mut install, mut yes) = (false, false, false);
             while let Some(arg) = s.take() {
                 match arg {
                     "--dry-run" => dry_run = true,
+                    "--install" => install = true,
+                    "--yes" => yes = true,
                     other => return Err(unknown("setup", other)),
                 }
             }
-            if !dry_run {
+            if dry_run && install {
                 return Err(Error::Usage(
-                    "setup only previews in this build; pass --dry-run".into(),
+                    "--dry-run and --install are mutually exclusive".into(),
                 ));
             }
-            Ok(Command::Setup)
+            if !dry_run && !install {
+                return Err(Error::Usage(
+                    "setup previews with --dry-run or installs with --install".into(),
+                ));
+            }
+            Ok(Command::Setup { install, yes })
         }
         "configure" => {
             let (mut dry_run, mut yes, mut restart, mut file) = (false, false, false, None);
@@ -304,9 +315,20 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             Ok(Command::Restore { yes, file })
         }
-        "uninstall" => Ok(Command::Uninstall {
-            yes: parse_yes(&mut s, "uninstall")?,
-        }),
+        "uninstall" => {
+            let (mut yes, mut remove_managed) = (false, false);
+            while let Some(arg) = s.take() {
+                match arg {
+                    "--yes" => yes = true,
+                    "--remove-managed" => remove_managed = true,
+                    other => return Err(unknown("uninstall", other)),
+                }
+            }
+            Ok(Command::Uninstall {
+                yes,
+                remove_managed,
+            })
+        }
         "rotate" => Ok(Command::Rotate {
             yes: parse_yes(&mut s, "rotate")?,
         }),
@@ -497,6 +519,21 @@ mod tests {
     #[test]
     fn setup_without_dry_run_is_refused() {
         assert!(parse(&argv(&["setup"])).is_err());
+        assert_eq!(
+            parse(&argv(&["setup", "--dry-run"])).unwrap(),
+            Command::Setup {
+                install: false,
+                yes: false
+            }
+        );
+        assert_eq!(
+            parse(&argv(&["setup", "--install", "--yes"])).unwrap(),
+            Command::Setup {
+                install: true,
+                yes: true
+            }
+        );
+        assert!(parse(&argv(&["setup", "--dry-run", "--install"])).is_err());
     }
 
     #[test]

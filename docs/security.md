@@ -17,6 +17,7 @@ Ratriyx reduces specific risks. It does not make your traffic anonymous. Read th
 | No unauthenticated control listener; ratriyx never listens | the program opens outbound connections only |
 | Privileged actions need `--yes`; the plan type has no stop action | `service::control`, `privoxy::configure_file_for`, `recovery::apply` |
 | Config edits: timestamped backup with mode/uid/gid, atomic write, hash-checked restore | `privoxy`, `fsutil` |
+| Managed setup records owned files/services and rolls back failed verification | `managed`, `maintenance::setup_install` |
 | Listener binds verified loopback-only, with process ownership where available | `service::listening`, `diagnostics::eval_listener` |
 | NEWNYM serialized across processes with reserve-before-send | `tor_control::rotate` |
 | Shell snapshot file is mode 0600 and never exported; per-session with `--session` | `shell::ensure_snapshot_for` |

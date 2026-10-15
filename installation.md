@@ -1,5 +1,37 @@
 # Installation
 
+## Precompiled installer (v0.2.0)
+
+No Rust, Cargo, or Git needed. Replace `0.2.0` with the release you want.
+
+Windows PowerShell:
+
+```powershell
+$env:RATRIYX_VERSION = '0.2.0'
+.\scripts\install.ps1
+```
+
+Linux or macOS:
+
+```bash
+RATRIYX_VERSION=0.2.0 ./scripts/install.sh
+```
+
+The installer downloads `ratriyx-<version>-<target>` from GitHub Releases, verifies
+its SHA-256 checksum, and fails closed on mismatch. The binary goes to a
+user-writable directory (`%LOCALAPPDATA%\Programs\Ratriyx` on Windows,
+`~/.local/bin` on Linux/macOS). Windows adds it to the user PATH; on
+Linux/macOS the installer prints the `export PATH` line when needed.
+Rerunning upgrades the binary and keeps configuration. Tor, Privoxy, and curl
+are still required separately until managed dependency setup lands; the
+installer tells you what is missing via `ratriyx setup --dry-run`.
+
+Manual fallback: download the archive and `.sha256` for your platform from the
+release page, verify with `sha256sum -c` (or `Get-FileHash` on Windows), and
+place `ratriyx` on your PATH yourself.
+
+## Building from source
+
 Ratriyx needs Tor, Privoxy, `curl`, and a Rust toolchain. Ratriyx does not install any of them. Each step below is yours to run and review.
 
 ## Ubuntu on WSL2 (tested target)
@@ -126,6 +158,16 @@ eval "$(ratriyx off)"    # restore what was there before
 ```
 
 PowerShell is supported through process-scoped `$env:` assignments printed by `ratriyx env --shell powershell`. Ratriyx never edits profiles or machine-level variables. Native Windows setup uses `scripts/windows/`; see below.
+
+### Zed and OpenCode agents
+
+Zed starts its coding agents as its own child processes, so they inherit Zed's
+environment, not your terminal's. `ratriyx run -- opencode` covers a terminal
+OpenCode session only. To route Zed's agent traffic: quit Zed, launch it from a
+shell that already has the proxy variables (for example `ratriyx run --mode tor -- zed`),
+then verify inside Zed with `ratriyx doctor --mode tor`. Alternatively set the
+proxy variables in Zed's own settings or launcher. Ratriyx cannot change an
+already running Zed or OpenCode server; restart them to apply a new route.
 
 ## Plain Linux (systemd; acceptance NOT VERIFIED)
 

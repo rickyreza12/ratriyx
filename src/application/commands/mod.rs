@@ -31,9 +31,13 @@ pub fn dispatch(command: Command) -> Result<i32> {
         } => launch::env(&cfg, shell, mode, &session),
         Command::Off { shell, session } => launch::off(shell, &session),
         Command::Recover { target, apply, yes } => maintenance::recover(&cfg, target, apply, yes),
-        Command::Setup => {
-            say!("{}", setup::report(&setup::gather(&path_var(), &cfg)));
-            Ok(0)
+        Command::Setup { install, yes } => {
+            if install {
+                maintenance::setup_install(&cfg, yes)
+            } else {
+                say!("{}", setup::report(&setup::gather(&path_var(), &cfg)));
+                Ok(0)
+            }
         }
         Command::Configure {
             dry_run,
@@ -46,7 +50,16 @@ pub fn dispatch(command: Command) -> Result<i32> {
             Ok(0)
         }
         Command::Restore { yes, file } => proxy::restore(&cfg, yes, file.as_deref()),
-        Command::Uninstall { yes } => maintenance::uninstall(yes),
+        Command::Uninstall {
+            yes,
+            remove_managed,
+        } => {
+            if remove_managed {
+                maintenance::uninstall_remove_managed(yes)
+            } else {
+                maintenance::uninstall(yes)
+            }
+        }
         Command::Rotate { yes } => diagnose::rotate(&cfg, yes),
         Command::ConfigMigrate { yes } => maintenance::config_migrate(yes),
         Command::Help | Command::Version => Ok(0),

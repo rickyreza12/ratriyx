@@ -12,6 +12,8 @@ Ratriyx (command: `ratriyx`) does not implement Tor or Privoxy. It checks them, 
 - `ratriyx env` and `ratriyx off` print shell code for you to evaluate, with a snapshot of prior values.
 - `ratriyx recover` previews a repair plan. It starts services only with `--apply --yes`.
 - `ratriyx configure`, `restore`, `service`, `rotate`, `uninstall`, and `config migrate` are guarded: each privileged action needs `--yes`, and each keeps a backup or refuses.
+- `ratriyx setup --install --yes` performs managed setup: appends the Privoxy rule with a backup, starts missing services, records ownership, verifies the route, and rolls back on failure. Missing Tor/Privoxy/curl stop with manual install steps.
+- `ratriyx uninstall --remove-managed --yes` restores recorded files and stops recorded services. Pre-existing installations are never recorded or removed.
 
 ## What it does not do
 

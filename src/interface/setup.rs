@@ -12,6 +12,7 @@ pub struct SetupFacts {
     pub systemd: bool,
     pub tor_installed: bool,
     pub privoxy_installed: bool,
+    pub curl_installed: bool,
     pub package_manager: Option<&'static str>,
     pub forwarding: String,
     pub tor_state: String,
@@ -45,6 +46,7 @@ pub fn gather(path_var: &OsStr, cfg: &crate::infrastructure::config::Config) -> 
         systemd,
         tor_installed: find_on_path("tor", path_var).is_some(),
         privoxy_installed: find_on_path("privoxy", path_var).is_some(),
+        curl_installed: find_on_path(platform::curl_program(), path_var).is_some(),
         package_manager: detect_package_manager(path_var),
         forwarding,
         tor_state,
@@ -59,6 +61,7 @@ pub fn report(facts: &SetupFacts) -> String {
     let _ = writeln!(out, "support:         {}", facts.support);
     let _ = writeln!(out, "systemd:         {}", yes_no(facts.systemd));
     let _ = writeln!(out, "tor installed:   {}", yes_no(facts.tor_installed));
+    let _ = writeln!(out, "curl installed:  {}", yes_no(facts.curl_installed));
     let _ = writeln!(
         out,
         "privoxy installed: {}",
@@ -117,6 +120,7 @@ mod tests {
             systemd: true,
             tor_installed: installed,
             privoxy_installed: installed,
+            curl_installed: installed,
             package_manager: Some("apt-get"),
             forwarding: forwarding.into(),
             tor_state: tor.into(),

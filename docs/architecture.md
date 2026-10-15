@@ -41,6 +41,8 @@ Environment variables reach only the processes that receive them. Ratriyx change
 | `domain::error` | Error types and exit codes. |
 | `application::commands` | Dispatches each parsed command. `diagnose` (doctor, ip, status, rotate), `launch` (run, env, off), `proxy` (configure, restore), `maintenance` (recover, uninstall, config migrate). |
 | `application::recovery` | Builds plans. The plan type has no stop action. Applies only approved service starts. |
+| `application::maintenance` | `recover`, `uninstall` (+`--remove-managed` restore of recorded files/services), `config migrate`, managed `setup --install`. |
+| `infrastructure::managed` | Versioned ownership record: which files/services Ratriyx created, with backups. Corrupt records stop managed work. |
 | `interface::cli` | Parses arguments. Usage errors exit 2 before any platform check. |
 | `interface::diagnostics` | Turns observations into PASS, WARN, FAIL, or NOT_TESTED. Renders text and JSON with redaction. |
 | `interface::setup` | Read-only discovery and a list of steps for you to review. |
