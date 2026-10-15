@@ -99,6 +99,32 @@ fn dead_proxy_endpoint_refuses_tor_mode_and_launches_nothing() {
 
 #[cfg(unix)]
 #[test]
+fn allow_unverified_tor_launch_sets_child_proxy_env() {
+    if !on_wsl() {
+        return;
+    }
+    let home = scratch_config("allow", "[proxy]\nport = 1\n");
+    let out = Command::new(env!("CARGO_BIN_EXE_ratriyx"))
+        .env("XDG_CONFIG_HOME", &home)
+        .args([
+            "run",
+            "--mode",
+            "tor",
+            "--allow-unverified",
+            "--",
+            "sh",
+            "-c",
+            "echo proxies=${HTTP_PROXY:-unset},${ALL_PROXY:-unset}",
+        ])
+        .output()
+        .expect("ratriyx binary runs");
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.contains("http://127.0.0.1:1"), "{text}");
+}
+
+#[cfg(unix)]
+#[test]
 fn modes_switch_repeatedly_without_leaking_proxy_state() {
     if !on_wsl() {
         return;

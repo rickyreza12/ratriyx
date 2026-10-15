@@ -12,3 +12,7 @@ pub(crate) mod runner;
 pub(crate) mod service;
 pub(crate) mod shell;
 pub(crate) mod tor_control;
+// Windows-targeted; exercised cross-platform by its tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) mod winmanaged;
+pub(crate) mod winpkg;

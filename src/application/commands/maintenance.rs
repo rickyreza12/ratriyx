@@ -8,6 +8,7 @@ use crate::infrastructure::managed;
 use crate::infrastructure::privoxy;
 use crate::infrastructure::service;
 use crate::infrastructure::shell;
+use crate::infrastructure::winpkg;
 use crate::interface::cli::ShellKind;
 use crate::interface::diagnostics;
 use crate::interface::setup;
@@ -21,19 +22,52 @@ use std::path::{Path, PathBuf};
 pub fn setup_install(cfg: &Config, yes: bool) -> Result<i32> {
     let path_var = env::var_os("PATH").unwrap_or_default();
     let facts = setup::gather(&path_var, cfg);
+    let dir = shell::require_state_dir()?;
     if !facts.curl_installed {
-        return Err(Error::Config(
-            "curl is required for verification; install it, then re-run".into(),
-        ));
-    }
-    for (present, name) in [
-        (facts.tor_installed, "tor"),
-        (facts.privoxy_installed, "privoxy"),
-    ] {
-        if !present {
-            return Err(Error::Config(format!(
-                "{name} is not installed; install it with your package manager, then re-run `ratriyx setup --install --yes`"
+        // Built-in curl.exe is preferred on Windows; only a missing curl takes
+        // the managed path, and only on Windows where the source is verified.
+        if !cfg!(windows) {
+            return Err(Error::Config(
+                "curl is required for verification; install it, then re-run".into(),
+            ));
+        }
+        let actions = winpkg::plan_for("curl", false, Some("cURL.cURL"), None);
+        if !yes {
+            return Err(Error::Approval(format!(
+                "managed setup would:\n  {}\nre-run with --install --yes to approve",
+                winpkg::describe(&actions).join("\n  ")
             )));
+        }
+        for action in &actions {
+            winpkg::execute(action, &dir)?;
+        }
+        managed::stamp(&dir)?;
+        managed::record_dependency(
+            &dir,
+            "curl",
+            "winget:cURL.cURL",
+            "unknown",
+            "package-manager",
+        )?;
+        say!("installed curl through WinGet");
+    }
+    if !facts.tor_installed || !facts.privoxy_installed {
+        #[cfg(windows)]
+        {
+            return setup_install_managed_windows(cfg, &facts, yes, &dir);
+        }
+        #[cfg(not(windows))]
+        {
+            for (present, name) in [
+                (facts.tor_installed, "tor"),
+                (facts.privoxy_installed, "privoxy"),
+            ] {
+                if !present {
+                    return Err(Error::Config(format!(
+                        "{name} is not installed; install it with your package manager, then re-run `ratriyx setup --install --yes`"
+                    )));
+                }
+            }
         }
     }
     let forwarding =
@@ -53,7 +87,6 @@ pub fn setup_install(cfg: &Config, yes: bool) -> Result<i32> {
             plan.join("\n  ")
         )));
     }
-    let dir = shell::require_state_dir()?;
     managed::stamp(&dir)?;
     let path = PathBuf::from(&cfg.privoxy_config);
     let mut edited = false;
@@ -106,6 +139,175 @@ pub fn setup_install(cfg: &Config, yes: bool) -> Result<i32> {
                 "route did not verify ({reason}); managed changes were rolled back"
             )))
         }
+    }
+}
+
+/// Windows managed install (M005-M008): downloads pinned official artifacts,
+/// writes Ratriyx-owned configs, runs tracked daemon processes, verifies,
+/// and rolls back on failure. Only runs when binaries are missing; healthy
+/// existing installations never reach here.
+#[cfg(windows)]
+fn setup_install_managed_windows(
+    cfg: &Config,
+    facts: &setup::SetupFacts,
+    yes: bool,
+    dir: &Path,
+) -> Result<i32> {
+    use crate::infrastructure::winmanaged as wm;
+    let Some(base) = wm::managed_base() else {
+        return Err(Error::Config(
+            "cannot find LOCALAPPDATA for managed setup".into(),
+        ));
+    };
+    let listeners = service::listening().unwrap_or_default();
+    for port in [9050u16, 9051, 8118] {
+        if !wm::port_free(&listeners, port) {
+            return Err(Error::Verification(format!(
+                "port {port} is already occupied; managed setup refuses to take it over"
+            )));
+        }
+    }
+    let mut plan = Vec::new();
+    if !facts.tor_installed {
+        plan.push(format!(
+            "download Tor {} and verify its checksum",
+            wm::TOR_BUNDLE_VERSION
+        ));
+        plan.push("write owned torrc and start managed Tor".to_string());
+    }
+    if !facts.privoxy_installed {
+        plan.push("install Privoxy through WinGet".to_string());
+        plan.push("write owned Privoxy config and start managed Privoxy".to_string());
+    }
+    if !yes {
+        return Err(Error::Approval(format!(
+            "managed setup would:\n  {}\nre-run with --install --yes to approve",
+            plan.join("\n  ")
+        )));
+    }
+    let tor_dir = base.join("tor");
+    let data_dir = tor_dir.join("Data");
+    let torrc = tor_dir.join("torrc");
+    let conf = base.join("privoxy.conf");
+    let tor_pid = wm::pid_path(dir, "tor");
+    let privoxy_pid = wm::pid_path(dir, "privoxy");
+    let rollback_created = |started: &[PathBuf]| {
+        for pid in started.iter().rev() {
+            let _ = wm::stop_tracked(pid);
+        }
+        let _ = fs::remove_dir_all(&tor_dir);
+        let _ = fs::remove_file(&conf);
+    };
+    let mut started: Vec<PathBuf> = Vec::new();
+    // Tor first: Privoxy needs it.
+    if !facts.tor_installed {
+        let bundle = winpkg::execute(
+            &winpkg::Action::Fetch {
+                url: wm::TOR_BUNDLE_URL.into(),
+                sha256: wm::TOR_BUNDLE_SHA256.into(),
+            },
+            &base,
+        )?;
+        if let Err(e) = (|| -> Result<()> {
+            wm::extract_bundle(&bundle.path, &tor_dir)?;
+            fs::create_dir_all(&data_dir).map_err(fsutil::io_err)?;
+            fs::write(&torrc, wm::torrc_text(&data_dir, 9050, 9051)).map_err(fsutil::io_err)?;
+            let exe = tor_dir.join("Tor").join("tor.exe");
+            if !exe.exists() {
+                return Err(Error::Verification(format!(
+                    "bundle has no {}",
+                    exe.display()
+                )));
+            }
+            let torrc_arg = torrc.to_string_lossy().to_string();
+            wm::spawn_tracked(&exe, &["-f", torrc_arg.as_str()], &tor_pid)?;
+            started.push(tor_pid.clone());
+            wm::wait_for_socks("127.0.0.1:9050", 60)?;
+            Ok(())
+        })() {
+            rollback_created(&started);
+            return Err(e);
+        }
+        managed::record_dependency(
+            dir,
+            "tor",
+            "official-download:tor-expert-bundle",
+            wm::TOR_BUNDLE_VERSION,
+            wm::TOR_BUNDLE_SHA256,
+        )?;
+        managed::record_file(dir, &torrc, "", &PathBuf::new())?;
+    }
+    if !facts.privoxy_installed {
+        if let Err(e) = (|| -> Result<()> {
+            winpkg::execute(
+                &winpkg::Action::WingetInstall {
+                    package: wm::PRIVOXY_WINGET_ID.into(),
+                },
+                &base,
+            )?;
+            let path_var = env::var_os("PATH").unwrap_or_default();
+            let exe = crate::infrastructure::opencode::find_on_path("privoxy", &path_var)
+                .ok_or_else(|| {
+                    Error::Verification("Privoxy installed but privoxy.exe is not on PATH".into())
+                })?;
+            fs::write(&conf, wm::privoxy_conf_text(8118, "127.0.0.1:9050"))
+                .map_err(fsutil::io_err)?;
+            let conf_arg = conf.to_string_lossy().to_string();
+            wm::spawn_tracked(&exe, &[conf_arg.as_str()], &privoxy_pid)?;
+            started.push(privoxy_pid.clone());
+            wait_for_listener(8118, 30)?;
+            Ok(())
+        })() {
+            rollback_created(&started);
+            return Err(e);
+        }
+        managed::record_dependency(
+            dir,
+            "privoxy",
+            "winget:Privoxy.Privoxy",
+            "unknown",
+            "package-manager",
+        )?;
+        managed::record_file(dir, &conf, "", &PathBuf::new())?;
+    }
+    let mcfg = Config {
+        privoxy_config: conf.to_string_lossy().to_string(),
+        tor_cookie_path: data_dir
+            .join("control_auth_cookie")
+            .to_string_lossy()
+            .to_string(),
+        ..cfg.clone()
+    };
+    match diagnostics::verify_route_with_timeout(&mcfg, 30) {
+        None => {
+            say!("setup: managed Tor and Privoxy installed, route verified (IsTor true)");
+            Ok(0)
+        }
+        Some(reason) => {
+            rollback_created(&started);
+            Err(Error::Verification(format!(
+                "route did not verify ({reason}); managed changes were rolled back"
+            )))
+        }
+    }
+}
+
+/// Polls the listener table until `port` appears or the deadline passes.
+#[cfg(windows)]
+fn wait_for_listener(port: u16, deadline_secs: u64) -> Result<()> {
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    loop {
+        let listeners = service::listening().unwrap_or_default();
+        if !crate::infrastructure::winmanaged::port_free(&listeners, port) {
+            return Ok(());
+        }
+        if start.elapsed() >= Duration::from_secs(deadline_secs) {
+            return Err(Error::Verification(format!(
+                "nothing listening on port {port} after {deadline_secs}s; refusing to continue"
+            )));
+        }
+        std::thread::sleep(Duration::from_secs(1));
     }
 }
 
@@ -249,6 +451,14 @@ fn owned_in_state_dir(dir: &Path) -> Vec<PathBuf> {
             owned.push(path);
         }
     }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".pid") {
+                owned.push(entry.path());
+            }
+        }
+    }
     owned
 }
 
@@ -288,6 +498,12 @@ fn restore_recorded_files(dir: &Path, files: &[managed::ManagedFile]) -> Result<
     let mut out = Vec::new();
     for f in files {
         let path = PathBuf::from(&f.path);
+        if f.backup.is_empty() {
+            // Created by Ratriyx, not edited: removal is the rollback.
+            fs::remove_file(&path).map_err(fsutil::io_err)?;
+            out.push(format!("removed created {}", path.display()));
+            continue;
+        }
         let backup = PathBuf::from(&f.backup);
         out.push(privoxy::restore_file(&path, &backup, true)?);
     }

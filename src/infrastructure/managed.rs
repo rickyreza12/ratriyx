@@ -216,6 +216,26 @@ pub fn stamp(dir: &Path) -> Result<()> {
     })
 }
 
+/// Records a dependency Ratriyx installed. Never records pre-existing tools.
+pub fn record_dependency(
+    dir: &Path,
+    name: &str,
+    source: &str,
+    version: &str,
+    sha256: &str,
+) -> Result<()> {
+    let dep = Dependency {
+        name: name.to_string(),
+        source: source.to_string(),
+        version: version.to_string(),
+        sha256: sha256.to_string(),
+    };
+    update(dir, |rec| {
+        rec.dependencies.retain(|d| d.name != dep.name);
+        rec.dependencies.push(dep.clone());
+    })
+}
+
 /// Records a config file Ratriyx just edited, with the backup that restores it.
 pub fn record_file(dir: &Path, path: &Path, sha256_after: &str, backup: &Path) -> Result<()> {
     update(dir, |rec| {
