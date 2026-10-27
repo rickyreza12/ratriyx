@@ -233,7 +233,8 @@ fn remove_privoxy_owned(state: &Path) -> Result<()> {
 
 #[cfg(windows)]
 fn remove_tor_owned(state: &Path, original_record: &managed::Record) -> Result<()> {
-    let rec = managed::load(state)?.ok_or_else(|| Error::Config("ownership record missing".into()))?;
+    let rec =
+        managed::load(state)?.ok_or_else(|| Error::Config("ownership record missing".into()))?;
     if !owns(&rec, "tor", "official-download:tor-expert-bundle") {
         return Err(Error::Verification("Tor is not Ratriyx-owned".into()));
     }
