@@ -248,6 +248,19 @@ pub fn record_file(dir: &Path, path: &Path, sha256_after: &str, backup: &Path) -
     })
 }
 
+/// Forget a dependency only after its uninstall has completed.
+/// Keep other dependencies and the ownership record for safe retries.
+pub fn forget_dependency(dir: &Path, name: &str, created_file: &Path) -> Result<()> {
+    let Some(_) = load(dir)? else {
+        return Err(Error::Config("no managed ownership record found".into()));
+    };
+    let recorded_file = created_file.display().to_string();
+    update(dir, |rec| {
+        rec.dependencies.retain(|dep| dep.name != name);
+        rec.files.retain(|file| file.path != recorded_file);
+    })
+}
+
 /// Records a service Ratriyx started. Never records a service it did not start.
 pub fn record_service(dir: &Path, unit: &str) -> Result<()> {
     update(dir, |rec| {
@@ -285,6 +298,25 @@ mod tests {
         assert_eq!(rec.files.len(), 1);
         assert_eq!(rec.files[0].sha256_after, "bbb");
         assert_eq!(rec.services, vec!["tor@default".to_string()]);
+    }
+
+    #[test]
+    fn forgetting_one_dependency_preserves_the_other() {
+        let dir = dir("forget-one");
+        let torrc = dir.join("torrc");
+        let proxy = dir.join("privoxy.conf");
+        record_dependency(&dir, "tor", "official-download:tor-expert-bundle", "15.0.25", "abc")
+            .unwrap();
+        record_dependency(&dir, "privoxy", "winget:Privoxy.Privoxy", "unknown", "package-manager")
+            .unwrap();
+        record_file(&dir, &torrc, "", Path::new("")).unwrap();
+        record_file(&dir, &proxy, "", Path::new("")).unwrap();
+        forget_dependency(&dir, "tor", &torrc).unwrap();
+        let rec = load(&dir).unwrap().unwrap();
+        assert_eq!(rec.dependencies.len(), 1);
+        assert_eq!(rec.dependencies[0].name, "privoxy");
+        assert_eq!(rec.files.len(), 1);
+        assert_eq!(rec.files[0].path, proxy.display().to_string());
     }
 
     #[test]
