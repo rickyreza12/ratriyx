@@ -61,7 +61,9 @@ impl Platform {
                 Some(WslGen::Wsl1) => "conditional: WSL1 networking differs; NOT VERIFIED",
                 None => "conditional: plain Linux; NOT VERIFIED until tested",
             },
-            "windows" => "supported: native Windows managed setup tested; route verified separately",
+            "windows" => {
+                "supported: native Windows managed setup tested; route verified separately"
+            }
             "macos" => "conditional: macOS; NOT VERIFIED until tested",
             _ => "unsupported",
         }
