@@ -98,28 +98,33 @@ pub fn find_on_path(name: &str, path_var: &OsStr) -> Option<PathBuf> {
 
 /// Used by `run` to decide whether a program is an interop launcher before it starts.
 pub fn program_is_interop(program: &str, path_var: &OsStr) -> bool {
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
+        let _ = path_var;
         // Native Windows applications inherit proxy variables; WSL processes
         // are a distinct environment and cannot be assumed to inherit them.
-        return is_wsl_launcher(program);
+        is_wsl_launcher(program)
     }
-    let direct = Path::new(program);
-    if is_interop_path(direct) {
-        return true;
-    }
-    let resolved = if direct.components().count() > 1 {
-        Some(direct.to_path_buf())
-    } else {
-        find_on_path(program, path_var)
-    };
-    match resolved {
-        Some(path) if is_interop_path(&path) => true,
-        Some(path) => match read_head(&path) {
-            Some(bytes) => classify_content(&bytes) == Kind::InteropLauncher,
+    #[cfg(not(windows))]
+    {
+        let direct = Path::new(program);
+        if is_interop_path(direct) {
+            return true;
+        }
+        let resolved = if direct.components().count() > 1 {
+            Some(direct.to_path_buf())
+        } else {
+            find_on_path(program, path_var)
+        };
+        match resolved {
+            Some(path) if is_interop_path(&path) => true,
+            Some(path) => match read_head(&path) {
+                Some(bytes) => classify_content(&bytes) == Kind::InteropLauncher,
+                None => true,
+            },
+            // An unresolvable program is treated as interop (fail-closed).
             None => true,
-        },
-        // An unresolvable program is treated as interop, which is the conservative choice.
-        None => true,
+        }
     }
 }
 
