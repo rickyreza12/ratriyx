@@ -264,7 +264,17 @@ mod tests {
         let dir = env::temp_dir().join(format!("ratriyx-shell-env-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let path = ensure_snapshot_for(&dir, ShellKind::Bash, "default").unwrap();
-        let out = std::process::Command::new("env").output().unwrap();
+        let mut command = if cfg!(windows) {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/C", "set"]);
+            cmd
+        } else {
+            std::process::Command::new("env")
+        };
+
+        let out = command.output().unwrap();
+        assert!(out.status.success());
+
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(!text.contains(path.to_string_lossy().as_ref()));
     }

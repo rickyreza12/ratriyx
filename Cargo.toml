@@ -2,9 +2,13 @@
 name = "ratriyx"
 version = "0.1.0"
 edition = "2021"
-description = "Per-process privacy routing through existing Tor and Privoxy, for Ubuntu on WSL2"
-publish = false
+description = "Cross-platform per-process privacy routing through Tor and Privoxy"
 license = "MIT OR Apache-2.0"
 rust-version = "1.75"
+repository = "https://github.com/rickyreza12/ratriyx"
+homepage = "https://github.com/rickyreza12/ratriyx"
+readme = "README.md"
+keywords = ["tor", "proxy", "privacy", "cli", "network"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
