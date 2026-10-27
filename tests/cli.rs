@@ -27,6 +27,17 @@ fn help_lists_every_command_and_exits_zero() {
 }
 
 #[test]
+fn no_arguments_noninteractive_shows_help_without_setup() {
+    // .output() connects pipes: a script or Cargo test must never trigger
+    // network downloads or dependency installation.
+    let out = ratriyx(&[]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("USAGE:"));
+    assert!(!text.contains("Install and configure Tor"));
+}
+
+#[test]
 fn version_reports_the_package_version() {
     let out = ratriyx(&["--version"]);
     assert_eq!(out.status.code(), Some(0));
