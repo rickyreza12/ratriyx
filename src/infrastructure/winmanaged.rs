@@ -140,6 +140,7 @@ pub fn extract_bundle(archive: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Poll SOCKS5 until ready, printing elapsed time instead of hanging silently.
+#[cfg(test)]
 pub fn wait_for_socks(addr: &str, deadline_secs: u64) -> Result<()> {
     wait_for_socks_monitor(addr, deadline_secs, None, None, None)
 }
