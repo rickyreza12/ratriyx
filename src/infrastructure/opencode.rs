@@ -74,11 +74,24 @@ pub fn classify_content(bytes: &[u8]) -> Kind {
 pub fn find_on_path(name: &str, path_var: &OsStr) -> Option<PathBuf> {
     env::split_paths(path_var)
         .flat_map(|dir| {
-            let mut candidates = vec![dir.join(name)];
             if cfg!(windows) {
-                candidates.push(dir.join(format!("{name}.exe")));
+                // Unlike PowerShell, Command::new does not automatically
+                // resolve extensionless names using PATHEXT. Prefer native
+                // executables and then the documented cmd/bat npm shims.
+                // Do not run the Unix shell shim that npm also installs.
+                let lower = name.to_ascii_lowercase();
+                if [".exe", ".com", ".cmd", ".bat"]
+                    .iter()
+                    .any(|s| lower.ends_with(s))
+                {
+                    return vec![dir.join(name)];
+                }
+                return [".exe", ".com", ".cmd", ".bat"]
+                    .iter()
+                    .map(|ext| dir.join(format!("{name}{ext}")))
+                    .collect();
             }
-            candidates
+            vec![dir.join(name)]
         })
         .find(|candidate| candidate.is_file())
 }
@@ -278,6 +291,26 @@ mod tests {
         assert_eq!(found.version.as_deref(), Some("9.9.9"));
         assert_eq!(found.standalone, Some(true));
         assert!(program_is_interop("opencode", dir.as_os_str()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_resolution_prefers_exe_then_cmd_over_extensionless_sh() {
+        let dir = std::env::temp_dir().join(format!("ratriyx-windows-path-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("testcli"), "#!/bin/sh").unwrap();
+        fs::write(dir.join("testcli.cmd"), "@echo off").unwrap();
+        assert_eq!(
+            find_on_path("testcli", dir.as_os_str()),
+            Some(dir.join("testcli.cmd"))
+        );
+        fs::write(dir.join("testcli.exe"), "MZ").unwrap();
+        assert_eq!(
+            find_on_path("testcli", dir.as_os_str()),
+            Some(dir.join("testcli.exe"))
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

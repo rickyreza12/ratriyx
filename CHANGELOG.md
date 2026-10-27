@@ -17,6 +17,7 @@ All notable changes to Ratriyx are recorded here.
 - Improved Windows setup discovery, human-readable recovery hints and terminal experience; plain, redirected and machine-readable output remain supported.
 - Fix native Windows process detection: Windows PE executables such as curl.exe and opencode.exe no longer get rejected as WSL interop. Invoking wsl.exe still requires explicit unverified approval; WSL-hosted Windows launchers remain fail-closed.
 - Live Windows per-process launch acceptance: run --mode tor -- curl.exe ... returned IsTor=true with exit code 0.
+- Resolve Windows npm CLI launchers from PATH by trying native .exe/.com, then .cmd/.bat shims before extensionless POSIX scripts; fixes run --mode tor -- opencode --version on Windows.
 - Increased minimum Rust version to 1.88 due to Ratatui dependency requirements. Ratatui UI can be disabled with RATRIYX_NO_TUI or NO_COLOR.
 
 

@@ -28,7 +28,22 @@ fn exit_code(status: ExitStatus) -> i32 {
 /// Launches `program` directly, with no shell, and returns the child's exit status.
 /// Failure to start is a pre-launch error (exit 1). Failure after start is `PostLaunch` (exit 70).
 pub fn run_child(program: &str, args: &[String], plan: &EnvPlan) -> Result<i32> {
-    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    let executable = {
+        // A terminal may resolve "opencode" to a PowerShell/npm shim, but
+        // Windows CreateProcess does not expand extensionless names that
+        // way. Resolve an actual executable or npm .cmd shim from PATH.
+        if std::path::Path::new(program).components().count() == 1 {
+            std::env::var_os("PATH")
+                .and_then(|path| crate::infrastructure::opencode::find_on_path(program, &path))
+                .unwrap_or_else(|| std::path::PathBuf::from(program))
+        } else {
+            std::path::PathBuf::from(program)
+        }
+    };
+    #[cfg(not(windows))]
+    let executable = std::path::PathBuf::from(program);
+    let mut cmd = Command::new(&executable);
     cmd.args(args);
     apply_env(&mut cmd, plan);
     let mut child = cmd

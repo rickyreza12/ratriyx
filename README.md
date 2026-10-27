@@ -27,7 +27,7 @@ packages installed separately. A real Windows managed installation successfully 
 
 ## Windows native application routing in v0.3.0
 
-Native Windows executables (such as curl.exe and opencode.exe) now inherit Ratriyx's per-process proxy environment without being mistaken for WSL interoperability launchers. Windows executables launched from inside WSL, and Windows launching wsl.exe, are still treated as unverified cross-environment processes. Do not assume that every application, plugin or subprocess honors HTTP_PROXY, HTTPS_PROXY and ALL_PROXY; verify the application's own traffic.
+Native Windows executables and npm command shims (such as curl.exe and opencode.cmd) now inherit Ratriyx's per-process proxy environment without being mistaken for WSL interoperability launchers. Windows executables launched from inside WSL, and Windows launching wsl.exe, are still treated as unverified cross-environment processes. Do not assume that every application, plugin or subprocess honors HTTP_PROXY, HTTPS_PROXY and ALL_PROXY; verify the application's own traffic.
 
 ## Upcoming v0.3.0 Windows terminal installer
 
