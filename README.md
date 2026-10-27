@@ -25,6 +25,10 @@ scripts, CI, and `ratriyx --help` never initiate installation. Windows uses
 a pinned Tor bundle and WinGet Privoxy; Linux/macOS still require system
 packages installed separately. A real Windows managed installation successfully reached `IsTor=true` on October 27, 2026; individual Windows environments must still be checked. Setup now displays a six-stage progress bar, Tor download percentage, and WinGet elapsed-time indicators for Privoxy. If Tor exits or times out, the installer preserves a diagnostic log at `%LOCALAPPDATA%\\ratriyx\\state\\setup-tor-stderr.log` rather than hiding the original failure. A Tor SOCKS5 listener is not proof of anonymity; final route verification requires `IsTor=true`.
 
+## Windows native application routing in v0.3.0
+
+Native Windows executables (such as curl.exe and opencode.exe) now inherit Ratriyx's per-process proxy environment without being mistaken for WSL interoperability launchers. Windows executables launched from inside WSL, and Windows launching wsl.exe, are still treated as unverified cross-environment processes. Do not assume that every application, plugin or subprocess honors HTTP_PROXY, HTTPS_PROXY and ALL_PROXY; verify the application's own traffic.
+
 ## Upcoming v0.3.0 Windows terminal installer
 
 The Windows managed installer now waits for Tor network bootstrap to reach 100% before making its external IsTor request, with a bounded five-minute bootstrap window and live percentage updates. A ready SOCKS5 listener alone does not mean usable Tor circuits exist. Failed network verification stops only newly started processes and preserves owned Tor data for retry.

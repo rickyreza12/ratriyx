@@ -26,7 +26,7 @@ pub struct Resolution {
 impl Kind {
     pub fn text(self) -> &'static str {
         match self {
-            Kind::Native => "native Linux binary",
+            Kind::Native => "native executable",
             Kind::Script => "shell script",
             Kind::InteropLauncher => "Windows interop launcher",
             Kind::Unknown => "unknown",
@@ -36,6 +36,9 @@ impl Kind {
 
 /// Windows executables, and anything under the WSL `/mnt/` drive mounts, run through interop.
 pub fn is_interop_path(path: &Path) -> bool {
+    if cfg!(windows) {
+        return false;
+    }
     let text = path.to_string_lossy().to_ascii_lowercase();
     text.ends_with(".exe") || text.starts_with("/mnt/")
 }
@@ -51,7 +54,11 @@ pub fn classify_content(bytes: &[u8]) -> Kind {
     if bytes.starts_with(b"\x7fELF") {
         Kind::Native
     } else if bytes.starts_with(b"MZ") {
-        Kind::InteropLauncher
+        if cfg!(windows) {
+            Kind::Native
+        } else {
+            Kind::InteropLauncher
+        }
     } else if bytes.starts_with(b"#!") {
         if contains(bytes, ".exe") {
             Kind::InteropLauncher
@@ -78,6 +85,11 @@ pub fn find_on_path(name: &str, path_var: &OsStr) -> Option<PathBuf> {
 
 /// Used by `run` to decide whether a program is an interop launcher before it starts.
 pub fn program_is_interop(program: &str, path_var: &OsStr) -> bool {
+    if cfg!(windows) {
+        // Native Windows applications inherit proxy variables; WSL processes
+        // are a distinct environment and cannot be assumed to inherit them.
+        return is_wsl_launcher(program);
+    }
     let direct = Path::new(program);
     if is_interop_path(direct) {
         return true;
@@ -96,6 +108,14 @@ pub fn program_is_interop(program: &str, path_var: &OsStr) -> bool {
         // An unresolvable program is treated as interop, which is the conservative choice.
         None => true,
     }
+}
+
+#[cfg(windows)]
+fn is_wsl_launcher(program: &str) -> bool {
+    Path::new(program).file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        name.eq_ignore_ascii_case("wsl") || name.eq_ignore_ascii_case("wsl.exe")
+    })
 }
 
 fn read_head(path: &Path) -> Option<Vec<u8>> {
@@ -191,13 +211,31 @@ pub fn resolve(path_var: &OsStr) -> Resolution {
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
     #[test]
-    fn windows_launcher_paths_are_interop() {
+    fn windows_launcher_paths_are_interop_from_linux() {
         assert!(is_interop_path(Path::new(
             "/mnt/c/Users/x/AppData/npm/opencode"
         )));
         assert!(is_interop_path(Path::new("C:\\tools\\opencode.exe")));
         assert!(!is_interop_path(Path::new("/usr/bin/opencode")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_windows_exe_is_not_wsl_interop() {
+        assert!(!is_interop_path(Path::new(r"C:\Windows\System32\curl.exe")));
+        assert_eq!(classify_content(b"MZ\x90\x00"), Kind::Native);
+        assert!(!program_is_interop(
+            "curl.exe",
+            OsStr::new(r"C:\Windows\System32")
+        ));
+        assert!(!program_is_interop("opencode.exe", OsStr::new("")));
+        assert!(program_is_interop("wsl.exe", OsStr::new("")));
+        assert!(program_is_interop(
+            r"C:\Windows\System32\wsl.exe",
+            OsStr::new("")
+        ));
     }
 
     #[test]
@@ -252,8 +290,9 @@ mod tests {
         assert_eq!(parse_server_status("unrelated help text"), None);
     }
 
+    #[cfg(not(windows))]
     #[test]
-    fn unresolvable_program_is_treated_as_interop() {
+    fn unresolvable_program_is_treated_as_interop_from_linux() {
         assert!(program_is_interop(
             "definitely-missing-program-xyz",
             OsStr::new("")

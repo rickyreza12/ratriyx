@@ -15,6 +15,8 @@ All notable changes to Ratriyx are recorded here.
 - Windows live acceptance completed: fresh Tor bootstrap from 0% to 100%, Privoxy listener, IsTor=true, doctor 8 pass/0 fail, repeat setup idempotent.
 - Continues to fail closed when ports are occupied or a configuration is unexpectedly edited. Only newly installed dependencies are recorded as owned.
 - Improved Windows setup discovery, human-readable recovery hints and terminal experience; plain, redirected and machine-readable output remain supported.
+- Fix native Windows process detection: Windows PE executables such as curl.exe and opencode.exe no longer get rejected as WSL interop. Invoking wsl.exe still requires explicit unverified approval; WSL-hosted Windows launchers remain fail-closed.
+- Live Windows per-process launch acceptance: run --mode tor -- curl.exe ... returned IsTor=true with exit code 0.
 - Increased minimum Rust version to 1.88 due to Ratatui dependency requirements. Ratatui UI can be disabled with RATRIYX_NO_TUI or NO_COLOR.
 
 
