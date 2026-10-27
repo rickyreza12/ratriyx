@@ -2,8 +2,8 @@ mod diagnose;
 mod launch;
 mod maintenance;
 mod onboarding;
-mod uninstall;
 mod proxy;
+mod uninstall;
 
 use crate::domain::error::Result;
 use crate::infrastructure::config::{self, Config};
