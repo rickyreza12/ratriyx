@@ -11,6 +11,7 @@ pub(crate) mod redact;
 pub(crate) mod runner;
 pub(crate) mod service;
 pub(crate) mod shell;
+pub(crate) mod strict_guard;
 pub(crate) mod tor_control;
 // Windows-targeted; exercised cross-platform by its tests.
 #[cfg_attr(not(windows), allow(dead_code))]

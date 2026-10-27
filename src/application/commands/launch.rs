@@ -5,6 +5,7 @@ use crate::infrastructure::config::Config;
 use crate::infrastructure::opencode;
 use crate::infrastructure::runner;
 use crate::infrastructure::shell;
+use crate::infrastructure::strict_guard;
 use crate::interface::cli::ShellKind;
 use crate::interface::diagnostics;
 
@@ -12,10 +13,19 @@ pub fn run(
     cfg: &Config,
     mode: Mode,
     verify: Verify,
+    strict: bool,
     opencode: bool,
     program: &str,
     args: &[String],
 ) -> Result<i32> {
+    // Acquire the enforcement lease BEFORE any child process is launched.
+    // Environment proxy variables cannot substitute for OS isolation.
+    // Keep the lease alive until the launched application exits.
+    let _guard = if strict {
+        Some(strict_guard::acquire(program)?)
+    } else {
+        None
+    };
     let path = path_var();
     let interop = opencode::program_is_interop(program, &path);
     if opencode && args.iter().any(|a| a == "--standalone") {

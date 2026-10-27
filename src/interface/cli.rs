@@ -8,8 +8,8 @@ USAGE:
   ratriyx doctor [--json] [--mode direct|tor] [--app opencode]
   ratriyx ip
   ratriyx status
-  ratriyx run [--mode direct|tor] [--require-tor|--allow-unverified] -- <program> [args...]
-  ratriyx run --opencode [--mode direct|tor] [--allow-unverified] [-- args...]
+  ratriyx run [--mode direct|tor] [--require-tor|--allow-unverified] [--strict] -- <program> [args...]
+  ratriyx run --opencode [--mode direct|tor] [--allow-unverified] [--strict] [-- args...]
   ratriyx env --shell bash|zsh|fish|powershell [--mode direct|tor] [--session NAME]
   ratriyx on  [--shell bash|zsh|fish|powershell] [--session NAME]
   ratriyx off [--shell bash|zsh|fish|powershell] [--session NAME]
@@ -27,6 +27,7 @@ USAGE:
 
 Ratriyx changes only the environment of the processes it starts. It never edits
 system-wide proxy settings. Privileged actions need --yes after review.
+--strict requires OS enforcement and currently refuses to launch.
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,7 @@ pub enum Command {
     Run {
         mode: Mode,
         verify: Verify,
+        strict: bool,
         opencode: bool,
         program: String,
         args: Vec<String>,
@@ -378,7 +380,8 @@ fn parse_yes(s: &mut Scan, command: &str) -> Result<bool> {
 }
 
 fn parse_run(s: &mut Scan) -> Result<Command> {
-    let (mut mode, mut require, mut allow, mut opencode) = (Mode::Tor, false, false, false);
+    let (mut mode, mut require, mut allow, mut strict, mut opencode) =
+        (Mode::Tor, false, false, false, false);
     loop {
         match s.take() {
             None if opencode => break,
@@ -387,6 +390,7 @@ fn parse_run(s: &mut Scan) -> Result<Command> {
             Some("--mode") => mode = parse_mode(s.value("--mode")?)?,
             Some("--require-tor") => require = true,
             Some("--allow-unverified") => allow = true,
+            Some("--strict") => strict = true,
             Some("--opencode") => opencode = true,
             Some(other) => return Err(unknown("run", other)),
         }
@@ -394,6 +398,11 @@ fn parse_run(s: &mut Scan) -> Result<Command> {
     if require && allow {
         return Err(Error::Usage(
             "--require-tor and --allow-unverified are mutually exclusive".into(),
+        ));
+    }
+    if strict && (mode != Mode::Tor || allow) {
+        return Err(Error::Usage(
+            "--strict requires --mode tor and cannot combine with --allow-unverified".into(),
         ));
     }
     let verify = if allow {
@@ -417,6 +426,7 @@ fn parse_run(s: &mut Scan) -> Result<Command> {
     Ok(Command::Run {
         mode,
         verify,
+        strict,
         opencode,
         program,
         args,
@@ -525,6 +535,7 @@ mod tests {
             Command::Run {
                 mode: Mode::Direct,
                 verify: Verify::Require,
+                strict: false,
                 opencode: false,
                 program: "echo".into(),
                 args: argv(&["--mode", "x y"]),
@@ -548,6 +559,42 @@ mod tests {
             "x"
         ]))
         .is_err());
+    }
+
+    #[test]
+    fn strict_mode_parses_but_requires_tor_without_unverified_override() {
+        assert!(matches!(
+            parse(&argv(&["run", "--strict", "--", "opencode"])).unwrap(),
+            Command::Run {
+                strict: true,
+                mode: Mode::Tor,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&argv(&["run", "--opencode", "--strict"])).unwrap(),
+            Command::Run {
+                strict: true,
+                opencode: true,
+                ..
+            }
+        ));
+        assert!(parse(&argv(&[
+            "run", "--mode", "direct", "--strict", "--", "opencode"
+        ]))
+        .is_err());
+        assert!(parse(&argv(&[
+            "run",
+            "--allow-unverified",
+            "--strict",
+            "--",
+            "opencode"
+        ]))
+        .is_err());
+        assert!(matches!(
+            parse(&argv(&["run", "--", "opencode", "--strict"])).unwrap(),
+            Command::Run { strict: false, ref args, .. } if args == &argv(&["--strict"])
+        ));
     }
 
     #[test]

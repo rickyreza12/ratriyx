@@ -61,6 +61,30 @@ fn staged_platforms_are_not_rejected_with_exit_three() {
 }
 
 #[test]
+fn strict_mode_refuses_without_os_enforcement_before_child_launch() {
+    // The executable does not exist. If strict starts resolution or launch
+    // before acquiring the guard, it would produce a different error.
+    let out = ratriyx(&["run", "--strict", "--", "this-must-never-launch"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("strict routing is not available"), "{err}");
+    assert!(err.contains("Refusing to start"), "{err}");
+}
+
+#[test]
+fn strict_mode_has_no_unverified_or_direct_fallback() {
+    for args in [
+        vec!["run", "--strict", "--mode", "direct", "--", "ignored"],
+        vec!["run", "--strict", "--allow-unverified", "--", "ignored"],
+    ] {
+        let out = ratriyx(&args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+    }
+}
+
+#[test]
 fn doctor_json_flag_is_accepted_by_the_parser() {
     let out = ratriyx(&["doctor", "--json", "--mode", "bogus"]);
     assert_eq!(out.status.code(), Some(2));

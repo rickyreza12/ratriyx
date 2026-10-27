@@ -26,10 +26,11 @@ pub fn dispatch(command: Command) -> Result<i32> {
         Command::Run {
             mode,
             verify,
+            strict,
             opencode,
             program,
             args,
-        } => launch::run(&cfg, mode, verify, opencode, &program, &args),
+        } => launch::run(&cfg, mode, verify, strict, opencode, &program, &args),
         Command::Env {
             shell,
             mode,

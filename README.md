@@ -29,6 +29,18 @@ packages installed separately. A real Windows managed installation successfully 
 
 Native Windows executables and npm command shims (such as curl.exe and opencode.cmd) now inherit Ratriyx's per-process proxy environment without being mistaken for WSL interoperability launchers. Windows executables launched from inside WSL, and Windows launching wsl.exe, are still treated as unverified cross-environment processes. Do not assume that every application, plugin or subprocess honors HTTP_PROXY, HTTPS_PROXY and ALL_PROXY; verify the application's own traffic.
 
+## v0.4 strict-routing foundation (feature branch only)
+
+A separate development branch adds the opt-in `ratriyx run --strict --mode tor -- ...`
+CLI contract. **Strict mode is not yet available**: on every platform it
+exits with code 3 without starting the child, because a real OS-enforced
+network guard is required. It never silently falls back to ordinary
+per-process proxy variables. Existing `run --mode tor` continues unchanged.
+
+See [docs/strict-routing-v0.4.md](docs/strict-routing-v0.4.md) for
+the Windows WFP, Linux namespace and macOS enforcement requirements, and the
+two alternatives to Privoxy (embedded HTTP-to-SOCKS with C Tor or embedded Arti).
+
 ## Upcoming v0.3.0 Windows terminal installer
 
 The Windows managed installer now waits for Tor network bootstrap to reach 100% before making its external IsTor request, with a bounded five-minute bootstrap window and live percentage updates. A ready SOCKS5 listener alone does not mean usable Tor circuits exist. Failed network verification stops only newly started processes and preserves owned Tor data for retry.
