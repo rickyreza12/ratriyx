@@ -35,7 +35,8 @@ packages installed separately. Live Windows installation is not yet accepted. Du
 - `ratriyx recover` previews a repair plan. It starts services only with `--apply --yes`.
 - `ratriyx configure`, `restore`, `service`, `rotate`, `uninstall`, and `config migrate` are guarded: each privileged action needs `--yes`, and each keeps a backup or refuses.
 - `ratriyx setup --install --yes` performs managed setup: appends the Privoxy rule with a backup, starts missing services, records ownership, verifies the route, and rolls back on failure. Missing Tor/Privoxy/curl stop with manual install steps.
-- `ratriyx uninstall --remove-managed --yes` restores recorded files and stops recorded services. Pre-existing installations are never recorded or removed.
+- `ratriyx uninstall` asks separately whether to remove Ratriyx settings, the Ratriyx-owned Tor bundle, and Ratriyx-installed Privoxy. Each defaults to No; external dependencies are **never removed implicitly**. `ratriyx uninstall --yes` removes only settings; `ratriyx uninstall --yes --remove-tor --remove-privoxy` is an explicit scripted clean reset. Only dependencies recorded as installed by Ratriyx are eligible.
+- `ratriyx uninstall --remove-managed --yes` is the legacy managed-file restore command, which refuses to discard dependency ownership metadata while managed dependencies remain. The CLI executable is managed separately by `cargo uninstall ratriyx`.
 
 ## What it does not do
 
