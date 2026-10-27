@@ -69,6 +69,43 @@ Protection requirements:
 tests; already-running application servers, hardware/software outside OS policy,
 local IPC paths and user-supplied network tunnels expand the threat model.
 
+## Native Windows WFP foundation (development branch)
+
+The Windows-only module now uses windows-sys for direct WFP bindings.
+The read-only CLI preflight can be run with:
+
+```powershell
+ratriyx strict check
+```
+
+It opens a dynamic WFP engine session and immediately closes it. This adds
+**zero firewall rules**, requires no Tor restart, and does not claim protected
+traffic. A successful result means the WFP engine is reachable only; it does
+not prove sufficient firewall permissions or an active kill switch.
+
+The WFP module also compiles an **internal, deliberately uncalled lab-only**
+transactional rule installer. Its proposed rule shape for an isolated executable
+identity is:
+
+- ALE_AUTH_CONNECT_V4: permit TCP to 127.0.0.1:8118 at higher weight.
+- ALE_AUTH_CONNECT_V4: block other outgoing connections from that app.
+- ALE_AUTH_CONNECT_V6: block all outgoing IPv6 from that app until an
+  explicitly configured IPv6 proxy exists.
+- Filters live in a dynamic session and disappear when it closes.
+- Failed transactions abort; unrelated firewall rules are not removed.
+
+This is NOT a sufficient application protection mechanism. In particular
+WFP ALE_APP_ID targets **all** instances of an executable path and cannot
+automatically follow Node/Bun subprocesses. Separate Windows DNS services,
+already-established connections and the OS firewall's own arbitration further
+require validation. No code path currently installs these filters, and the
+strict runner still fails closed.
+
+**Next gate:** isolated process-tree identity, suspended/atomic launch,
+privilege model, verified enforcement of direct TCP, UDP/QUIC, local DNS,
+IPv6 and child processes. Only test filter installation on an isolated
+disposable VM and a dedicated test executable after explicit approval.
+
 ## Platform paths and privilege impact
 
 | Platform | Candidate guard | Gaps to solve before enabling |

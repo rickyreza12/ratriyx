@@ -22,6 +22,7 @@ USAGE:
   ratriyx uninstall --yes --remove-untracked-privoxy
   ratriyx uninstall --remove-managed [--yes]
   ratriyx rotate [--yes]
+  ratriyx strict check
   ratriyx config migrate [--yes]
   ratriyx --help | --version
 
@@ -100,6 +101,7 @@ pub enum Command {
     Rotate {
         yes: bool,
     },
+    StrictCheck,
     ConfigMigrate {
         yes: bool,
     },
@@ -356,6 +358,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
         "rotate" => Ok(Command::Rotate {
             yes: parse_yes(&mut s, "rotate")?,
         }),
+        "strict" => match s.take() {
+            Some("check") if s.take().is_none() => Ok(Command::StrictCheck),
+            _ => Err(Error::Usage("strict supports only: check".into())),
+        },
         "config" => match s.take() {
             Some("migrate") => Ok(Command::ConfigMigrate {
                 yes: parse_yes(&mut s, "config migrate")?,
@@ -488,6 +494,16 @@ mod tests {
             "--remove-untracked-privoxy"
         ]))
         .is_err());
+    }
+
+    #[test]
+    fn strict_check_is_read_only_command() {
+        assert_eq!(
+            parse(&argv(&["strict", "check"])).unwrap(),
+            Command::StrictCheck
+        );
+        assert!(parse(&argv(&["strict", "apply"])).is_err());
+        assert!(parse(&argv(&["strict", "check", "--yes"])).is_err());
     }
 
     #[test]

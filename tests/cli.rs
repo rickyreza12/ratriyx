@@ -61,6 +61,24 @@ fn staged_platforms_are_not_rejected_with_exit_three() {
 }
 
 #[test]
+fn strict_check_never_claims_guard_active() {
+    let out = ratriyx(&["strict", "check"]);
+    // Windows hosted CI may not grant WFP session permissions.
+    // Both outcomes are safe: availability or explicit refusal.
+    if cfg!(windows) {
+        assert!(matches!(out.status.code(), Some(0) | Some(3)));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if out.status.code() == Some(0) {
+            assert!(stdout.contains("no filters installed"));
+            assert!(stdout.contains("NOT ACTIVE"));
+        }
+    } else {
+        assert_eq!(out.status.code(), Some(3));
+    }
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("strict policy: ACTIVE"));
+}
+
+#[test]
 fn strict_mode_refuses_without_os_enforcement_before_child_launch() {
     // The executable does not exist. If strict starts resolution or launch
     // before acquiring the guard, it would produce a different error.

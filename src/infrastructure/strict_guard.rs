@@ -23,7 +23,7 @@ pub struct StrictEnforcementLease {
 /// Refuse all platforms until the OS-specific enforcement backend is implemented.
 pub fn acquire(_program: &str) -> Result<StrictEnforcementLease> {
     Err(Error::Unsupported(format!(
-        "strict routing is not available on {}: OS-level application isolation          has not been implemented and tested. Refusing to start the application          rather than risk direct-IP or DNS leakage; ordinary Tor proxy mode          is available without --strict, but cannot guarantee leak prevention",
+        "strict routing is not available on {}: OS-level application isolation has not been implemented and tested. Refusing to start the application rather than risk direct-IP or DNS leakage; ordinary Tor proxy mode remains available without --strict, but cannot guarantee leak prevention",
         std::env::consts::OS
     )))
 }

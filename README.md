@@ -37,6 +37,10 @@ exits with code 3 without starting the child, because a real OS-enforced
 network guard is required. It never silently falls back to ordinary
 per-process proxy variables. Existing `run --mode tor` continues unchanged.
 
+Windows now provides a read-only `ratriyx strict check` command that opens
+and closes a dynamic WFP session without adding any filters. An internal
+non-production WFP filter builder remains disconnected from all CLI launches.
+
 See [docs/strict-routing-v0.4.md](docs/strict-routing-v0.4.md) for
 the Windows WFP, Linux namespace and macOS enforcement requirements, and the
 two alternatives to Privoxy (embedded HTTP-to-SOCKS with C Tor or embedded Arti).

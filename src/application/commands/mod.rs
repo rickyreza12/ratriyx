@@ -3,6 +3,7 @@ mod launch;
 mod maintenance;
 mod onboarding;
 mod proxy;
+mod strict;
 mod uninstall;
 
 use crate::domain::error::Result;
@@ -71,6 +72,7 @@ pub fn dispatch(command: Command) -> Result<i32> {
             }
         }
         Command::Rotate { yes } => diagnose::rotate(&cfg, yes),
+        Command::StrictCheck => strict::check(),
         Command::ConfigMigrate { yes } => maintenance::config_migrate(yes),
         Command::Help | Command::Version => Ok(0),
     }
