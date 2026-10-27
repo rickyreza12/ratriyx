@@ -714,7 +714,10 @@ mod tests {
         assert!(!marker.exists());
         assert!(managed::record_path(&state).exists());
         assert!(pid.exists());
-        assert_eq!(managed::load(&state).unwrap().unwrap().dependencies.len(), 1);
+        assert_eq!(
+            managed::load(&state).unwrap().unwrap().dependencies.len(),
+            1
+        );
     }
 
     #[test]
