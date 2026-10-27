@@ -56,6 +56,33 @@ pub fn pid_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.pid"))
 }
 
+/// Discover the Privoxy executable after WinGet installs it. Installers
+/// cannot reliably update the running process's PATH, so check standard
+/// machine and per-user locations without scanning arbitrary directories.
+pub fn find_privoxy_exe(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
+    if let Some(found) = crate::infrastructure::opencode::find_on_path("privoxy", path_var) {
+        return Some(found);
+    }
+    #[cfg(windows)]
+    {
+        for name in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            let Some(base) = std::env::var_os(name).filter(|v| !v.is_empty()) else {
+                continue;
+            };
+            let base = PathBuf::from(base);
+            for candidate in [
+                base.join("Privoxy").join("privoxy.exe"),
+                base.join("Programs").join("Privoxy").join("privoxy.exe"),
+            ] {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Ratriyx-managed dependency root. Windows only; elsewhere managed
 /// installs are not implemented (T306/T307).
 pub fn managed_base() -> Option<PathBuf> {
