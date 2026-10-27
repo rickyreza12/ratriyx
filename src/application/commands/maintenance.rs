@@ -328,6 +328,7 @@ fn setup_install_managed_windows(
             // An incomplete install must not leave a successful ownership
             // record behind: commit managed metadata only after IsTor=true.
             let record_result = (|| -> Result<()> {
+                managed::stamp(dir)?;
                 if !facts.tor_installed {
                     managed::record_dependency(
                         dir,
