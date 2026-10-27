@@ -197,6 +197,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tee_keeps_bounded_tail_and_preserves_unicode() {
+        let content = "●".repeat(10_000);
+        let observed = tee_output(std::io::Cursor::new(content.into_bytes()), true).unwrap();
+        assert!(!observed.is_empty());
+        assert!(observed.len() <= 16_390);
+    }
+
+    #[test]
     fn present_tool_plans_nothing() {
         assert!(plan_for("tor", true, Some("X.Y"), None).is_empty());
     }
