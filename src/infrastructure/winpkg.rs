@@ -97,7 +97,26 @@ pub fn execute(action: &Action, dest_dir: &Path) -> Result<FetchResult> {
             // Tee both pipes concurrently; WinGet output remains visible.
             let out_thread = std::thread::spawn(move || tee_output(stdout, false));
             let err_thread = std::thread::spawn(move || tee_output(stderr, true));
-            let status = child.wait().map_err(io_err)?;
+            // WinGet provides messages but not a reliable percent-complete.
+            // Report real elapsed time while its installer is running.
+            let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let alive = std::sync::Arc::clone(&running);
+            let ticker = std::thread::spawn(move || {
+                let start = std::time::Instant::now();
+                while alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                        crate::interface::terminal::install_activity(
+                            "Installing Privoxy through WinGet",
+                            start.elapsed().as_secs(),
+                        );
+                    }
+                }
+            });
+            let waited = child.wait();
+            running.store(false, std::sync::atomic::Ordering::Relaxed);
+            let _ = ticker.join();
+            let status = waited.map_err(io_err)?;
             let out = out_thread
                 .join()
                 .map_err(|_| Error::Io("WinGet stdout reader panicked".into()))?
