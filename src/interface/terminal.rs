@@ -21,10 +21,19 @@ fn accent(text: &str, code: &str, enabled: bool) -> String {
 pub fn install_header() {
     let color = color_enabled();
     eprintln!();
-    eprintln!("  {}", accent("R A T R I Y X   /   S E T U P", "1;36", color));
-    eprintln!("  {}", accent("====================================", "2", color));
+    eprintln!(
+        "  {}",
+        accent("R A T R I Y X   /   S E T U P", "1;36", color)
+    );
+    eprintln!(
+        "  {}",
+        accent("====================================", "2", color)
+    );
     eprintln!("  Tor + Privoxy  |  local-only proxies");
-    eprintln!("  {}", accent("No changes to global Windows proxy settings", "2", color));
+    eprintln!(
+        "  {}",
+        accent("No changes to global Windows proxy settings", "2", color)
+    );
     eprintln!();
 }
 
@@ -60,7 +69,11 @@ pub fn install_success(total: usize) {
     eprintln!(
         "  {} {}",
         accent(&format!("[{}] ", "#".repeat(20)), "1;32", color_enabled()),
-        accent(&format!("{total}/{total} complete - IsTor=true"), "1;32", color_enabled())
+        accent(
+            &format!("{total}/{total} complete - IsTor=true"),
+            "1;32",
+            color_enabled()
+        )
     );
     eprintln!();
 }
@@ -71,7 +84,11 @@ fn heading(out: &mut String, label: &str, colorful: bool) {
         "\n  {}",
         accent(&label.to_ascii_uppercase(), "1;36", colorful)
     );
-    let _ = writeln!(out, "  {}", accent("-------------------------------------------", "2", colorful));
+    let _ = writeln!(
+        out,
+        "  {}",
+        accent("-------------------------------------------", "2", colorful)
+    );
 }
 
 /// Human-facing diagnostic display. Machine-readable --json and redirected
@@ -122,7 +139,10 @@ pub fn doctor(checks: &[Check]) -> String {
     let pass = checks.iter().filter(|c| c.status == Status::Pass).count();
     let fail = checks.iter().filter(|c| c.status == Status::Fail).count();
     let warn = checks.iter().filter(|c| c.status == Status::Warn).count();
-    let skip = checks.iter().filter(|c| c.status == Status::NotTested).count();
+    let skip = checks
+        .iter()
+        .filter(|c| c.status == Status::NotTested)
+        .count();
     heading(&mut out, "summary", colorful);
     let summary = format!("{pass} pass  /  {fail} fail  /  {warn} warn  /  {skip} not tested");
     let _ = writeln!(
@@ -136,7 +156,10 @@ pub fn doctor(checks: &[Check]) -> String {
             "  {}",
             accent("Tor routing is NOT currently verified.", "1;31", colorful)
         );
-    } else if checks.iter().any(|c| c.id == "tor.istor" && c.status == Status::Pass) {
+    } else if checks
+        .iter()
+        .any(|c| c.id == "tor.istor" && c.status == Status::Pass)
+    {
         let _ = writeln!(
             out,
             "  {}",
