@@ -24,7 +24,7 @@ requires an explicit `y` or `yes` before proceeding. Declining saves a local
 skip marker; `ratriyx setup --install` remains available later. Calls from
 scripts, CI, and `ratriyx --help` never initiate installation. Windows uses
 a pinned Tor bundle and WinGet Privoxy; Linux/macOS still require system
-packages installed separately. Live Windows installation is not yet accepted. During installation, stderr reports six stages and Tor readiness (up to 60 seconds). If Tor exits or times out, the installer preserves a diagnostic log at `%LOCALAPPDATA%\\ratriyx\\state\\setup-tor-stderr.log` rather than hiding the original failure. A Tor SOCKS5 listener is not proof of anonymity; final route verification requires `IsTor=true`.
+packages installed separately. A real Windows managed installation successfully reached `IsTor=true` on October 27, 2026; individual Windows environments must still be checked. Setup now displays a six-stage progress bar, Tor download percentage, and WinGet elapsed-time indicators for Privoxy. If Tor exits or times out, the installer preserves a diagnostic log at `%LOCALAPPDATA%\\ratriyx\\state\\setup-tor-stderr.log` rather than hiding the original failure. A Tor SOCKS5 listener is not proof of anonymity; final route verification requires `IsTor=true`.
 
 ## What it does
 
@@ -37,6 +37,7 @@ packages installed separately. Live Windows installation is not yet accepted. Du
 - `ratriyx setup --install --yes` performs managed setup: appends the Privoxy rule with a backup, starts missing services, records ownership, verifies the route, and rolls back on failure. Missing Tor/Privoxy/curl stop with manual install steps.
 - `ratriyx uninstall` asks separately whether to remove Ratriyx settings, the Ratriyx-owned Tor bundle, and Ratriyx-installed Privoxy. Each defaults to No; external dependencies are **never removed implicitly**. `ratriyx uninstall --yes` removes only settings; `ratriyx uninstall --yes --remove-tor --remove-privoxy` is an explicit scripted clean reset. Only dependencies recorded as installed by Ratriyx are eligible.
 - `ratriyx uninstall --remove-managed --yes` is the legacy managed-file restore command, which refuses to discard dependency ownership metadata while managed dependencies remain. The CLI executable is managed separately by `cargo uninstall ratriyx`.
+- Interactive terminal output uses grouped, color-coded doctor results and overall install progress. Redirected diagnostic output and `doctor --json` stay stable and uncolored; set `NO_COLOR=1` to disable ANSI colors.
 
 ## What it does not do
 
@@ -52,7 +53,7 @@ packages installed separately. Live Windows installation is not yet accepted. Du
 |---|---|
 | Ubuntu on WSL2 | Tested target. |
 | Plain Linux (systemd) | Implemented; acceptance NOT VERIFIED on a plain-Linux machine. |
-| Native Windows (PowerShell 5.1) | Implemented; runtime NOT VERIFIED on Windows. Scripts in `scripts/windows/`. |
+| Native Windows (PowerShell) | Managed Tor + Privoxy install and `IsTor=true` verified on a Windows machine (2026-10-27); wider Windows compatibility and scripts not fully validated. |
 | macOS (Homebrew) | Implemented; runtime NOT VERIFIED on macOS. |
 | Other operating systems | Refused, exit 3. |
 
