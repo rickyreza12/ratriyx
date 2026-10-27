@@ -714,7 +714,7 @@ mod tests {
         assert!(!marker.exists());
         assert!(managed::record_path(&state).exists());
         assert!(pid.exists());
-        assert!(uninstall_remove_managed(false).is_err() || managed::load(&state).is_ok());
+        assert_eq!(managed::load(&state).unwrap().unwrap().dependencies.len(), 1);
     }
 
     #[test]
