@@ -78,7 +78,12 @@ pub fn setup_install(cfg: &Config, yes: bool) -> Result<i32> {
     let privoxy_running = service::unit_active(service::PRIVOXY).unwrap_or(false);
     let plan = install_plan(&facts, &forwarding, tor_running, privoxy_running);
     if plan.is_empty() {
-        say!("setup: Tor and Privoxy are healthy; nothing to install or start");
+        if let Some(reason) = diagnostics::verify_route_with_timeout(cfg, 10) {
+            return Err(Error::Verification(format!(
+                "Tor and Privoxy appear installed, but routing is unverified: {reason}"
+            )));
+        }
+        say!("setup: Tor and Privoxy are healthy; route verified (IsTor true)");
         return Ok(0);
     }
     if !yes {
@@ -445,7 +450,7 @@ fn owned_in_state_dir(dir: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    for name in ["rotate.last", managed::RECORD_NAME] {
+    for name in ["rotate.last", "first-run-v1", managed::RECORD_NAME] {
         let path = dir.join(name);
         if path.exists() {
             owned.push(path);
