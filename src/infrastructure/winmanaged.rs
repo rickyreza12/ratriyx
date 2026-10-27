@@ -308,6 +308,52 @@ pub fn spawn_tracked_logged(
     Ok(child)
 }
 
+/// On Windows, verify that the PID file still points to the expected
+/// executable before stopping anything. A PID can be reused after a reboot;
+/// never kill a different process solely because its PID matches.
+#[cfg(windows)]
+pub fn stop_tracked_verified(pid_file: &Path, expected_exe: &Path) -> Result<String> {
+    if !pid_file.exists() {
+        return Ok("no Ratriyx-tracked process to stop".into());
+    }
+    let pid_text = fs::read_to_string(pid_file).map_err(io_err)?;
+    let pid: u32 = pid_text.trim().parse().map_err(|_| {
+        Error::Verification(format!(
+            "invalid tracked PID file {}; refusing to stop any process",
+            pid_file.display()
+        ))
+    })?;
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; if ($null -eq $p) {{ exit 3 }}; [Console]::Out.Write($p.ExecutablePath)"
+    );
+    let query = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|e| Error::Io(format!("cannot verify PID {pid} identity: {e}")))?;
+    if query.status.code() == Some(3) {
+        fs::remove_file(pid_file).map_err(io_err)?;
+        return Ok("tracked process already stopped; stale PID file removed".into());
+    }
+    if !query.status.success() {
+        return Err(Error::Verification(format!(
+            "could not verify process identity for PID {pid}; refusing to stop it"
+        )));
+    }
+    let actual = String::from_utf8_lossy(&query.stdout).trim().to_string();
+    let actual_path = fs::canonicalize(&actual).map_err(|_| {
+        Error::Verification(format!(
+            "PID {pid} executable path cannot be verified; refusing to stop it"
+        ))
+    })?;
+    let expected_path = fs::canonicalize(expected_exe).map_err(io_err)?;
+    if !actual_path.to_string_lossy().eq_ignore_ascii_case(&expected_path.to_string_lossy()) {
+        return Err(Error::Verification(format!(
+            "PID {pid} does not belong to the expected Ratriyx-managed executable; refusing to stop it"
+        )));
+    }
+    stop_tracked(pid_file)
+}
+
 fn pid_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
@@ -509,6 +555,23 @@ mod tests {
         assert!(msg.contains("stale"));
         assert!(!pid.exists());
         assert!(stop_tracked(&pid).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verified_stop_refuses_to_kill_an_unrelated_process() {
+        let dir = std::env::temp_dir().join(format!(
+            "ratriyx-pid-identity-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let pid = dir.join("unrelated.pid");
+        fs::write(&pid, std::process::id().to_string()).unwrap();
+        let fake_exe = std::env::current_exe().unwrap().parent().unwrap().join("not-tor.exe");
+        assert!(stop_tracked_verified(&pid, &fake_exe).is_err());
+        assert!(pid.is_file());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
