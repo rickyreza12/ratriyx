@@ -170,7 +170,11 @@ pub fn eval_listener(
             "listener",
             tor_failure(mode),
             &format!("nothing listening on port {port}"),
-            Some("check the service that should own this port"),
+            Some(if cfg!(windows) {
+                "run `ratriyx setup --install --yes` to configure and start managed Tor/Privoxy; if you just uninstalled, these missing listeners are expected"
+            } else {
+                "check the service that should own this port"
+            }),
         );
     };
     if l.is_loopback() {
@@ -284,7 +288,11 @@ pub fn eval_socks(result: &std::result::Result<(), String>, addr: &str, mode: Mo
             "tor",
             tor_failure(mode),
             &format!("SOCKS5 check at {addr} failed: {msg}"),
-            Some("check tor@default and its SocksPort"),
+            Some(if cfg!(windows) {
+                "Tor SOCKS5 is unavailable; run `ratriyx setup --install --yes` after reviewing the install plan"
+            } else {
+                "check tor@default and its SocksPort"
+            }),
         ),
     }
 }
