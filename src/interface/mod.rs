@@ -2,3 +2,4 @@
 pub(crate) mod cli;
 pub(crate) mod diagnostics;
 pub(crate) mod setup;
+pub(crate) mod terminal;
