@@ -23,8 +23,10 @@ pub const TOR_BUNDLE_SHA256: &str =
 pub const PRIVOXY_WINGET_ID: &str = "Privoxy.Privoxy";
 
 /// Ratriyx-owned torrc: loopback SOCKS and control, cookie authentication,
-/// managed data directory. No secrets are written here; Tor creates the
-/// cookie file itself.
+/// managed data directory. Tor notices go to stderr, which the Ratriyx
+/// launcher already captures to a diagnostic file. This avoids Tor opening
+/// a second platform-specific log path during startup. No secrets are
+/// written here; Tor creates the cookie file itself.
 pub fn torrc_text(data_dir: &Path, socks_port: u16, control_port: u16) -> String {
     format!(
         "# Managed by ratriyx. Do not edit by hand.\n\
@@ -32,9 +34,8 @@ pub fn torrc_text(data_dir: &Path, socks_port: u16, control_port: u16) -> String
          ControlPort 127.0.0.1:{control_port}\n\
          CookieAuthentication 1\n\
          DataDirectory \"{}\"\n\
-         Log notice file \"{}\"\n",
+         Log notice stderr\n",
         torrc_path(data_dir),
-        torrc_path(&data_dir.join("tor.log")),
     )
 }
 
@@ -390,7 +391,8 @@ mod tests {
         assert!(text.contains("ControlPort 127.0.0.1:9051"));
         assert!(text.contains("CookieAuthentication 1"));
         assert!(text.contains(r#"DataDirectory "C:/My Dir/Tor Data""#));
-        assert!(text.contains(r#"Log notice file "C:/My Dir/Tor Data/tor.log""#));
+        assert!(text.contains("Log notice stderr"));
+        assert!(!text.contains("Log notice file"));
         assert!(!text.contains("C:\\My Dir"));
         assert!(!text.contains("Password") && !text.contains("HashedControlPassword"));
     }
@@ -403,7 +405,8 @@ mod tests {
         assert!(text.contains("ControlPort 127.0.0.1:9051"));
         assert!(text.contains("CookieAuthentication 1"));
         assert!(text.contains(r#"DataDirectory "/home/user/space dir/data""#));
-        assert!(text.contains(r#"Log notice file "/home/user/space dir/data/tor.log""#));
+        assert!(text.contains("Log notice stderr"));
+        assert!(!text.contains("Log notice file"));
         assert!(!text.contains("Password") && !text.contains("HashedControlPassword"));
     }
 
