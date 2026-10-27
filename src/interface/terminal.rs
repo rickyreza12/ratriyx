@@ -88,31 +88,35 @@ pub fn doctor(checks: &[Check]) -> String {
     );
     let _ = writeln!(out, "  Local proxy health and Tor verification");
 
-    let mut current_category = "";
+    let mut categories: Vec<&str> = Vec::new();
     for item in checks {
-        if item.category != current_category {
-            heading(&mut out, item.category, colorful);
-            current_category = item.category;
+        if !categories.contains(&item.category) {
+            categories.push(item.category);
         }
-        let (symbol, hue) = match item.status {
-            Status::Pass => ("PASS", "1;32"),
-            Status::Warn => ("WARN", "1;33"),
-            Status::Fail => ("FAIL", "1;31"),
-            Status::NotTested => ("SKIP", "2"),
-        };
-        let _ = writeln!(
-            out,
-            "  {}  {}",
-            accent(&format!("{symbol:<4}"), hue, colorful),
-            crate::infrastructure::redact::redact_text(&item.evidence)
-        );
-        if let Some(step) = &item.next_step {
+    }
+    for category in categories {
+        heading(&mut out, category, colorful);
+        for item in checks.iter().filter(|item| item.category == category) {
+            let (symbol, hue) = match item.status {
+                Status::Pass => ("PASS", "1;32"),
+                Status::Warn => ("WARN", "1;33"),
+                Status::Fail => ("FAIL", "1;31"),
+                Status::NotTested => ("SKIP", "2"),
+            };
             let _ = writeln!(
                 out,
-                "        {} {}",
-                accent("NEXT:", "1;33", colorful),
-                crate::infrastructure::redact::redact_text(step)
+                "  {}  {}",
+                accent(&format!("{symbol:<4}"), hue, colorful),
+                crate::infrastructure::redact::redact_text(&item.evidence)
             );
+            if let Some(step) = &item.next_step {
+                let _ = writeln!(
+                    out,
+                    "        {} {}",
+                    accent("NEXT:", "1;33", colorful),
+                    crate::infrastructure::redact::redact_text(step)
+                );
+            }
         }
     }
     let pass = checks.iter().filter(|c| c.status == Status::Pass).count();
