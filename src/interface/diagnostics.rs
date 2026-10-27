@@ -330,6 +330,18 @@ pub fn eval_forwarding(state: &FwState, mode: Mode) -> Check {
     }
 }
 
+fn windows_missing_proxy_config(path: &Path, mode: Mode) -> Check {
+    check(
+        "privoxy.forwarding",
+        "forwarding",
+        tor_failure(mode),
+        &format!("Privoxy forwarding config is missing: {}", path.display()),
+        Some(
+            "If you just uninstalled Tor/Privoxy this is expected. To reinstall, run `ratriyx setup --install --yes`; otherwise inspect the managed installation state.",
+        ),
+    )
+}
+
 pub fn eval_direct(outcome: &std::result::Result<Response, NetError>, mode: Mode) -> Check {
     match outcome {
         Ok(r) if r.status == 200 => check(
@@ -533,8 +545,25 @@ fn masked_proxy_vars() -> Vec<(String, String)> {
 pub fn run_doctor(cfg: &Config, mode: Mode, app: Option<&str>) -> Vec<Check> {
     let mut checks = vec![eval_platform(&crate::infrastructure::platform::detect())];
     checks.extend(eval_env(&masked_proxy_vars(), mode));
-    checks.push(eval_tor_unit(service::tor_state().as_ref(), mode));
-    checks.push(eval_bootstrap(service::tor_bootstrap_percent(), mode));
+    if cfg!(windows) {
+        checks.push(check(
+            "tor.instance",
+            "tor",
+            Status::NotTested,
+            "Windows managed Tor uses a tracked process, not a systemd service; check SOCKS5 below",
+            None,
+        ));
+        checks.push(check(
+            "tor.bootstrap",
+            "tor",
+            Status::NotTested,
+            "no systemd bootstrap telemetry on Windows; live Tor routing is checked with IsTor",
+            None,
+        ));
+    } else {
+        checks.push(eval_tor_unit(service::tor_state().as_ref(), mode));
+        checks.push(eval_bootstrap(service::tor_bootstrap_percent(), mode));
+    }
     let listening = service::listening();
     let listeners = listening.as_deref();
     checks.push(eval_listener(cfg.tor_socks_port, listeners, mode, "tor"));
@@ -546,10 +575,15 @@ pub fn run_doctor(cfg: &Config, mode: Mode, app: Option<&str>) -> Vec<Check> {
     ));
     checks.push(eval_listener(cfg.proxy_port, listeners, mode, "privoxy"));
     let desired = cfg.desired_rule();
-    checks.push(eval_forwarding(
-        &privoxy::read_effective_for(Path::new(&cfg.privoxy_config), &desired),
-        mode,
-    ));
+    let config_path = Path::new(&cfg.privoxy_config);
+    if cfg!(windows) && !config_path.exists() {
+        checks.push(windows_missing_proxy_config(config_path, mode));
+    } else {
+        checks.push(eval_forwarding(
+            &privoxy::read_effective_for(config_path, &desired),
+            mode,
+        ));
+    }
 
     let direct = network::fetch(&Route::Direct, DIRECT_URL, 15);
     checks.push(eval_direct(&direct.outcome, mode).timed(direct.elapsed_ms));
@@ -928,6 +962,17 @@ mod tests {
         assert!(verification_failure(&Err(NetError::Refused))
             .unwrap()
             .contains("connection refused"));
+    }
+
+    #[test]
+    fn missing_windows_proxy_config_has_specific_recovery_hint() {
+        let c = windows_missing_proxy_config(
+            Path::new(r"C:\\Users\\Example\\Ratriyx\\privoxy.conf"),
+            Mode::Tor,
+        );
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.evidence.contains("config is missing"));
+        assert!(c.next_step.unwrap().contains("setup --install --yes"));
     }
 
     #[test]
