@@ -379,15 +379,24 @@ fn setup_install_managed_windows(
 fn wait_for_listener(port: u16, deadline_secs: u64) -> Result<()> {
     use std::time::{Duration, Instant};
     let start = Instant::now();
+    let mut next_report = 3;
     loop {
         let listeners = service::listening().unwrap_or_default();
         if !crate::infrastructure::winmanaged::port_free(&listeners, port) {
             return Ok(());
         }
-        if start.elapsed() >= Duration::from_secs(deadline_secs) {
+        let elapsed = start.elapsed().as_secs();
+        if elapsed >= deadline_secs {
             return Err(Error::Verification(format!(
                 "nothing listening on port {port} after {deadline_secs}s; refusing to continue"
             )));
+        }
+        if elapsed >= next_report {
+            crate::interface::terminal::install_activity(
+                &format!("Waiting for Privoxy listener on port {port}"),
+                elapsed,
+            );
+            next_report = elapsed + 3;
         }
         std::thread::sleep(Duration::from_secs(1));
     }
