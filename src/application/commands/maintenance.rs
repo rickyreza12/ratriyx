@@ -472,7 +472,22 @@ fn uninstall_from(config: Option<PathBuf>, state: Option<PathBuf>, yes: bool) ->
         owned.push(path);
     }
     if let Some(dir) = state {
-        owned.extend(owned_in_state_dir(&dir));
+        // Retain the record and tracked process IDs while any managed
+        // dependency still exists. Otherwise a regular Ratriyx uninstall
+        // would erase the proof needed to remove it safely later.
+        let retain_ownership = managed::load(&dir)?.is_some_and(|rec| {
+            !rec.dependencies.is_empty() || !rec.files.is_empty() || !rec.services.is_empty()
+        });
+        for path in owned_in_state_dir(&dir) {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if retain_ownership && (name == managed::RECORD_NAME || name.ends_with(".pid")) {
+                continue;
+            }
+            owned.push(path);
+        }
+        if retain_ownership {
+            say!("Managed ownership record and PID files retained for later dependency removal.");
+        }
     }
     owned.sort();
     owned.dedup();
@@ -545,6 +560,11 @@ pub fn uninstall_remove_managed(yes: bool) -> Result<i32> {
         say!("no managed dependencies recorded");
         return Ok(0);
     };
+    if !rec.dependencies.is_empty() {
+        return Err(Error::Approval(
+            "Ratriyx-managed dependencies are still recorded. Use interactive 'ratriyx uninstall' to remove Tor/Privoxy first; refusing to discard their ownership record".into(),
+        ));
+    }
     for f in &rec.files {
         say!("managed file: {} (backup {})", f.path, f.backup);
     }
@@ -671,6 +691,30 @@ mod tests {
         let out = restore_recorded_files(&dir, &rec.files).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn settings_uninstall_preserves_managed_dependency_record() {
+        let home = state_scratch("keep-managed");
+        let state = home.join("state");
+        fs::create_dir_all(&state).unwrap();
+        managed::record_dependency(
+            &state,
+            "tor",
+            "official-download:tor-expert-bundle",
+            "15.0.25",
+            "known",
+        )
+        .unwrap();
+        let marker = state.join("first-run-v1");
+        let pid = state.join("tor.pid");
+        fs::write(&marker, "configured").unwrap();
+        fs::write(&pid, "4242").unwrap();
+        assert!(uninstall_from(None, Some(state.clone()), true).is_ok());
+        assert!(!marker.exists());
+        assert!(managed::record_path(&state).exists());
+        assert!(pid.exists());
+        assert!(uninstall_remove_managed(false).is_err() || managed::load(&state).is_ok());
     }
 
     #[test]
