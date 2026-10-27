@@ -312,7 +312,11 @@ pub fn spawn_tracked_logged(
 /// executable before stopping anything. A PID can be reused after a reboot;
 /// never kill a different process solely because its PID matches.
 #[cfg(windows)]
-pub fn stop_tracked_verified(pid_file: &Path, expected_exe: &Path) -> Result<String> {
+pub fn stop_tracked_verified(
+    pid_file: &Path,
+    expected_exe: &Path,
+    expected_config: &Path,
+) -> Result<String> {
     if !pid_file.exists() {
         return Ok("no Ratriyx-tracked process to stop".into());
     }
@@ -324,7 +328,7 @@ pub fn stop_tracked_verified(pid_file: &Path, expected_exe: &Path) -> Result<Str
         ))
     })?;
     let script = format!(
-        "$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; if ($null -eq $p) {{ exit 3 }}; [Console]::Out.Write($p.ExecutablePath)"
+        "$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; if ($null -eq $p) {{ exit 3 }}; [Console]::Out.Write($p.ExecutablePath + '|' + $p.CommandLine)"
     );
     let query = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -339,8 +343,17 @@ pub fn stop_tracked_verified(pid_file: &Path, expected_exe: &Path) -> Result<Str
             "could not verify process identity for PID {pid}; refusing to stop it"
         )));
     }
-    let actual = String::from_utf8_lossy(&query.stdout).trim().to_string();
-    let actual_path = fs::canonicalize(&actual).map_err(|_| {
+    let details = String::from_utf8_lossy(&query.stdout);
+    let (actual, command_line) = details.split_once('|').ok_or_else(|| {
+        Error::Verification("cannot inspect tracked process command line; refusing cleanup".into())
+    })?;
+    let config_arg = expected_config.to_string_lossy().to_ascii_lowercase();
+    if !command_line.to_ascii_lowercase().contains(&config_arg) {
+        return Err(Error::Verification(format!(
+            "PID {pid} is not running with Ratriyx's managed configuration; refusing to stop it"
+        )));
+    }
+    let actual_path = fs::canonicalize(actual.trim()).map_err(|_| {
         Error::Verification(format!(
             "PID {pid} executable path cannot be verified; refusing to stop it"
         ))
@@ -573,7 +586,7 @@ mod tests {
             .parent()
             .unwrap()
             .join("not-tor.exe");
-        assert!(stop_tracked_verified(&pid, &fake_exe).is_err());
+        assert!(stop_tracked_verified(&pid, &fake_exe, Path::new("C:\\fake.cfg")).is_err());
         assert!(pid.is_file());
         let _ = fs::remove_dir_all(&dir);
     }
