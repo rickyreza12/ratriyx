@@ -2,6 +2,7 @@ mod diagnose;
 mod launch;
 mod maintenance;
 mod onboarding;
+mod uninstall;
 mod proxy;
 
 use crate::domain::error::Result;
@@ -58,11 +59,13 @@ pub fn dispatch(command: Command) -> Result<i32> {
         Command::Uninstall {
             yes,
             remove_managed,
+            remove_tor,
+            remove_privoxy,
         } => {
             if remove_managed {
                 maintenance::uninstall_remove_managed(yes)
             } else {
-                maintenance::uninstall(yes)
+                uninstall::run(yes, remove_tor, remove_privoxy)
             }
         }
         Command::Rotate { yes } => diagnose::rotate(&cfg, yes),
