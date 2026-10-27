@@ -71,7 +71,8 @@ fn winget_program() -> &'static str {
 pub fn execute(action: &Action, dest_dir: &Path) -> Result<FetchResult> {
     match action {
         Action::WingetInstall { package } => {
-            let out = Command::new(winget_program())
+            eprintln!("  WinGet: installing {package} (streaming output)...");
+            let mut child = Command::new(winget_program())
                 .args([
                     "install",
                     "--exact",
@@ -81,26 +82,61 @@ pub fn execute(action: &Action, dest_dir: &Path) -> Result<FetchResult> {
                     "--accept-package-agreements",
                     "--accept-source-agreements",
                 ])
-                .output()
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
                 .map_err(|e| Error::Io(format!("cannot run WinGet (is it installed?): {e}")))?;
-            if out.status.success() {
-                return Ok(FetchResult {
-                    path: PathBuf::from(package),
-                });
+            let stdout = child.stdout.take().ok_or_else(|| {
+                Error::Io("cannot capture WinGet stdout".into())
+            })?;
+            let stderr = child.stderr.take().ok_or_else(|| {
+                Error::Io("cannot capture WinGet stderr".into())
+            })?;
+            // Tee both pipes concurrently; WinGet output remains visible.
+            let out_thread = std::thread::spawn(move || tee_output(stdout, false));
+            let err_thread = std::thread::spawn(move || tee_output(stderr, true));
+            let status = child.wait().map_err(io_err)?;
+            let out = out_thread.join().map_err(|_| Error::Io("WinGet stdout reader panicked".into()))?
+                .map_err(io_err)?;
+            let err = err_thread.join().map_err(|_| Error::Io("WinGet stderr reader panicked".into()))?
+                .map_err(io_err)?;
+            if status.success() {
+                eprintln!("  [OK] WinGet finished installing {package}");
+                return Ok(FetchResult { path: PathBuf::from(package) });
             }
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
             Err(classify_failure(
                 package,
-                out.status.code().unwrap_or(-1),
-                &text,
+                status.code().unwrap_or(-1),
+                &format!("{out}\n{err}"),
             ))
         }
         Action::Fetch { url, sha256 } => fetch_verified(url, sha256, dest_dir),
     }
+}
+
+/// Forward streaming child output while remembering a bounded error tail.
+fn tee_output<R: std::io::Read>(mut reader: R, stderr: bool) -> std::io::Result<String> {
+    use std::io::Write as _;
+    let mut retained = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        if stderr {
+            std::io::stderr().write_all(&chunk[..n])?;
+            std::io::stderr().flush()?;
+        } else {
+            std::io::stdout().write_all(&chunk[..n])?;
+            std::io::stdout().flush()?;
+        }
+        retained.extend_from_slice(&chunk[..n]);
+        if retained.len() > 16_384 {
+            retained.drain(..retained.len() - 16_384);
+        }
+    }
+    Ok(String::from_utf8_lossy(&retained).into_owned())
 }
 
 fn classify_failure(package: &str, code: i32, output: &str) -> Error {
@@ -138,7 +174,7 @@ fn fetch_verified(url: &str, sha256: &str, dest_dir: &Path) -> Result<FetchResul
     let name = url.rsplit('/').next().unwrap_or("download").to_string();
     let dest = dest_dir.join(&name);
     let status = Command::new(curl_program())
-        .args(["-fsSL", "-o"])
+        .args(["-q", "-fL", "--progress-bar", "--show-error", "-o"])
         .arg(&dest)
         .arg(url)
         .status()
