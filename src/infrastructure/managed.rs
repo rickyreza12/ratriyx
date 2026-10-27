@@ -305,10 +305,22 @@ mod tests {
         let dir = dir("forget-one");
         let torrc = dir.join("torrc");
         let proxy = dir.join("privoxy.conf");
-        record_dependency(&dir, "tor", "official-download:tor-expert-bundle", "15.0.25", "abc")
-            .unwrap();
-        record_dependency(&dir, "privoxy", "winget:Privoxy.Privoxy", "unknown", "package-manager")
-            .unwrap();
+        record_dependency(
+            &dir,
+            "tor",
+            "official-download:tor-expert-bundle",
+            "15.0.25",
+            "abc",
+        )
+        .unwrap();
+        record_dependency(
+            &dir,
+            "privoxy",
+            "winget:Privoxy.Privoxy",
+            "unknown",
+            "package-manager",
+        )
+        .unwrap();
         record_file(&dir, &torrc, "", Path::new("")).unwrap();
         record_file(&dir, &proxy, "", Path::new("")).unwrap();
         forget_dependency(&dir, "tor", &torrc).unwrap();
