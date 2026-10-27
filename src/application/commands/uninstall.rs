@@ -309,8 +309,10 @@ mod tests {
 
     #[test]
     fn ownership_requires_exact_install_source_and_windows() {
-        let mut rec = managed::Record::default();
-        rec.platform = "windows".into();
+        let mut rec = managed::Record {
+            platform: "windows".into(),
+            ..Default::default()
+        };
         rec.dependencies.push(managed::Dependency {
             name: "tor".into(),
             source: "official-download:tor-expert-bundle".into(),
