@@ -347,7 +347,7 @@ fn draw(frame: &mut Frame, state: &Dashboard) {
     );
     frame.render_widget(
         Paragraph::new(
-            "  Local-only proxies  |  No system-wide proxy changes  |  Ctrl+C to cancel",
+            "  Local-only proxies  |  No system-wide proxy changes  |  Logs preserved on error",
         ),
         rows[6],
     );
