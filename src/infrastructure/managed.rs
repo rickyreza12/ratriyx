@@ -250,6 +250,7 @@ pub fn record_file(dir: &Path, path: &Path, sha256_after: &str, backup: &Path) -
 
 /// Forget a dependency only after its uninstall has completed.
 /// Keep other dependencies and the ownership record for safe retries.
+#[cfg(any(windows, test))]
 pub fn forget_dependency(dir: &Path, name: &str, created_file: &Path) -> Result<()> {
     let Some(_) = load(dir)? else {
         return Err(Error::Config("no managed ownership record found".into()));
