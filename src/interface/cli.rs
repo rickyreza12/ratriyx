@@ -425,7 +425,13 @@ mod tests {
     #[test]
     fn uninstall_dependencies_require_separate_flags() {
         assert_eq!(
-            parse(&argv(&["uninstall", "--yes", "--remove-tor", "--remove-privoxy"])).unwrap(),
+            parse(&argv(&[
+                "uninstall",
+                "--yes",
+                "--remove-tor",
+                "--remove-privoxy"
+            ]))
+            .unwrap(),
             Command::Uninstall {
                 yes: true,
                 remove_managed: false,
