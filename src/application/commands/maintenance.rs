@@ -223,10 +223,11 @@ fn setup_install_managed_windows(
         + (if !facts.privoxy_installed { 2 } else { 0 })
         + 1;
     let mut step = 0usize;
+    crate::interface::terminal::install_header();
     macro_rules! stage {
         ($message:expr) => {{
             step += 1;
-            eprintln!("[{step}/{total}] {}", $message);
+            crate::interface::terminal::install_stage(step, total, $message);
         }};
     }
     // Tor first: Privoxy needs it.
@@ -239,6 +240,7 @@ fn setup_install_managed_windows(
             },
             &base,
         )?;
+        crate::interface::terminal::install_done("Tor bundle SHA-256 verified");
         if let Err(e) = (|| -> Result<()> {
             stage!("Extracting Tor and writing configuration...");
             wm::extract_bundle(&bundle.path, &tor_dir)?;
@@ -265,6 +267,7 @@ fn setup_install_managed_windows(
                     String::from_utf8_lossy(&check.stderr).trim()
                 )));
             }
+            crate::interface::terminal::install_done("Tor archive extracted; torrc validated");
             stage!("Starting Tor on SOCKS5 port 9050...");
             let mut child = wm::spawn_tracked_logged(
                 &exe,
@@ -280,6 +283,7 @@ fn setup_install_managed_windows(
                 &tor_stderr_log,
                 &tor_notices,
             )?;
+            crate::interface::terminal::install_done("Tor SOCKS5 ready on 127.0.0.1:9050");
             Ok(())
         })() {
             rollback_created(&started);
@@ -295,6 +299,7 @@ fn setup_install_managed_windows(
                 },
                 &base,
             )?;
+            crate::interface::terminal::install_done("Privoxy installed through WinGet");
             let path_var = env::var_os("PATH").unwrap_or_default();
             let exe = wm::find_privoxy_exe(&path_var).ok_or_else(|| {
                 Error::Verification(
@@ -308,6 +313,7 @@ fn setup_install_managed_windows(
             wm::spawn_tracked(&exe, &[conf_arg.as_str()], &privoxy_pid)?;
             started.push(privoxy_pid.clone());
             wait_for_listener(8118, 30)?;
+            crate::interface::terminal::install_done("Privoxy HTTP proxy ready on 127.0.0.1:8118");
             Ok(())
         })() {
             rollback_created(&started);
@@ -355,6 +361,7 @@ fn setup_install_managed_windows(
                 rollback_created(&started);
                 return Err(err);
             }
+            crate::interface::terminal::install_success(total);
             say!("setup: managed Tor and Privoxy installed, route verified (IsTor true)");
             Ok(0)
         }
