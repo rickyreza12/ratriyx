@@ -4,6 +4,28 @@ Per-process privacy routing through Tor and Privoxy, on Linux (WSL2 and plain Li
 
 Ratriyx (command: `ratriyx`) does not implement Tor or Privoxy. It checks them, starts a child program with proxy variables set for that child only, and reports what it could and could not verify. Tor (The Onion Router) is an anonymity network that exposes a SOCKS5 proxy (a general-purpose proxy protocol). Privoxy is a local HTTP proxy that forwards to Tor.
 
+## Installation and first run
+
+The released v0.1.0 installs with `cargo install ratriyx`. The interactive
+first-run wizard described below is in **v0.2.0 (unreleased)**.
+
+After v0.2.0 is published, the user experience will be:
+
+```powershell
+cargo install ratriyx
+ratriyx            # Interactive first-run checks and consent-based setup
+ratriyx doctor     # Safe to call directly from any shell/script
+ratriyx ip         # Verifies the Tor exit separately from the direct IP
+```
+
+The bare `ratriyx` command offers to install and configure missing Tor/Privoxy
+**only when run in an interactive terminal**. It previews the actions and
+requires an explicit `y` or `yes` before proceeding. Declining saves a local
+skip marker; `ratriyx setup --install` remains available later. Calls from
+scripts, CI, and `ratriyx --help` never initiate installation. Windows uses
+a pinned Tor bundle and WinGet Privoxy; Linux/macOS still require system
+packages installed separately. Live Windows installation is not yet accepted. During installation, stderr reports six stages and Tor readiness (up to 60 seconds). If Tor exits or times out, the installer preserves a diagnostic log at `%LOCALAPPDATA%\\ratriyx\\state\\setup-tor-stderr.log` rather than hiding the original failure. A Tor SOCKS5 listener is not proof of anonymity; final route verification requires `IsTor=true`.
+
 ## What it does
 
 - `ratriyx doctor` runs layered checks (environment, Tor instance, listeners, forwarding, direct request, proxied request, `IsTor`, OpenCode resolution) and reports `PASS`, `WARN`, `FAIL`, or `NOT_TESTED` with the next step.

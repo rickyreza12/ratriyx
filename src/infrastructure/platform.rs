@@ -133,16 +133,28 @@ pub fn require_supported(platform: &Platform) -> Result<()> {
     }
 }
 
-/// Default Privoxy config path for this machine. Windows uses the documented
-/// TorPrivoxy root; macOS prefers Homebrew locations; Linux uses /etc.
+/// Default Privoxy config path for this machine. Prefer files managed by
+/// Ratriyx after first-run setup; keep existing legacy installations intact.
 pub fn default_privoxy_path() -> String {
     if cfg!(windows) {
         if let Some(local) = env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
-            let mut p = PathBuf::from(local);
-            p.push("Programs");
-            p.push("TorPrivoxy");
-            p.push("privoxy.conf");
-            return p.to_string_lossy().to_string();
+            let local = PathBuf::from(local);
+            let managed = local
+                .join("Programs")
+                .join("Ratriyx")
+                .join("deps")
+                .join("privoxy.conf");
+            let legacy = local
+                .join("Programs")
+                .join("TorPrivoxy")
+                .join("privoxy.conf");
+            return if managed.exists() || !legacy.exists() {
+                managed
+            } else {
+                legacy
+            }
+            .to_string_lossy()
+            .to_string();
         }
         return r"C:\ProgramData\TorPrivoxy\privoxy.conf".to_string();
     }
@@ -161,16 +173,31 @@ pub fn default_privoxy_path() -> String {
     "/etc/privoxy/config".to_string()
 }
 
-/// Default Tor cookie path for this machine.
+/// Match the owned Tor data directory once managed setup has been completed.
+/// Retain the documented legacy path when it already exists.
 pub fn default_cookie_path() -> String {
     if cfg!(windows) {
         if let Some(local) = env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
-            let mut p = PathBuf::from(local);
-            p.push("Programs");
-            p.push("TorPrivoxy");
-            p.push("TorData");
-            p.push("control_auth_cookie");
-            return p.to_string_lossy().to_string();
+            let local = PathBuf::from(local);
+            let managed = local
+                .join("Programs")
+                .join("Ratriyx")
+                .join("deps")
+                .join("tor")
+                .join("Data")
+                .join("control_auth_cookie");
+            let legacy = local
+                .join("Programs")
+                .join("TorPrivoxy")
+                .join("TorData")
+                .join("control_auth_cookie");
+            return if managed.exists() || !legacy.exists() {
+                managed
+            } else {
+                legacy
+            }
+            .to_string_lossy()
+            .to_string();
         }
         return r"C:\ProgramData\TorPrivoxy\TorData\control_auth_cookie".to_string();
     }

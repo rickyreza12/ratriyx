@@ -78,7 +78,12 @@ pub fn setup_install(cfg: &Config, yes: bool) -> Result<i32> {
     let privoxy_running = service::unit_active(service::PRIVOXY).unwrap_or(false);
     let plan = install_plan(&facts, &forwarding, tor_running, privoxy_running);
     if plan.is_empty() {
-        say!("setup: Tor and Privoxy are healthy; nothing to install or start");
+        if let Some(reason) = diagnostics::verify_route_with_timeout(cfg, 10) {
+            return Err(Error::Verification(format!(
+                "Tor and Privoxy appear installed, but routing is unverified: {reason}"
+            )));
+        }
+        say!("setup: Tor and Privoxy are healthy; route verified (IsTor true)");
         return Ok(0);
     }
     if !yes {
@@ -190,17 +195,47 @@ fn setup_install_managed_windows(
     let torrc = tor_dir.join("torrc");
     let conf = base.join("privoxy.conf");
     let tor_pid = wm::pid_path(dir, "tor");
+    let tor_stderr_log = dir.join("setup-tor-stderr.log");
+    let tor_notices = data_dir.join("tor.log");
+    let tor_dir_preexisting = tor_dir.exists();
+    let conf_preexisting = conf.exists();
     let privoxy_pid = wm::pid_path(dir, "privoxy");
     let rollback_created = |started: &[PathBuf]| {
         for pid in started.iter().rev() {
             let _ = wm::stop_tracked(pid);
         }
-        let _ = fs::remove_dir_all(&tor_dir);
-        let _ = fs::remove_file(&conf);
+        eprintln!("  [ROLLBACK] Stopping only processes started by this setup");
+        if tor_notices.is_file() {
+            let retained = dir.join("setup-tor-notices.log");
+            if fs::copy(&tor_notices, &retained).is_ok() {
+                eprintln!("  Tor notices preserved: {}", retained.display());
+            }
+        }
+        if !tor_dir_preexisting {
+            let _ = fs::remove_dir_all(&tor_dir);
+        }
+        if !conf_preexisting {
+            let _ = fs::remove_file(&conf);
+        }
+        eprintln!(
+            "  Tor startup stderr was preserved: {}",
+            tor_stderr_log.display()
+        );
     };
     let mut started: Vec<PathBuf> = Vec::new();
+    let total = (if !facts.tor_installed { 3 } else { 0 })
+        + (if !facts.privoxy_installed { 2 } else { 0 })
+        + 1;
+    let mut step = 0usize;
+    macro_rules! stage {
+        ($message:expr) => {{
+            step += 1;
+            eprintln!("[{step}/{total}] {}", $message);
+        }};
+    }
     // Tor first: Privoxy needs it.
     if !facts.tor_installed {
+        stage!("Downloading and verifying Tor...");
         let bundle = winpkg::execute(
             &winpkg::Action::Fetch {
                 url: wm::TOR_BUNDLE_URL.into(),
@@ -209,6 +244,7 @@ fn setup_install_managed_windows(
             &base,
         )?;
         if let Err(e) = (|| -> Result<()> {
+            stage!("Extracting Tor and writing configuration...");
             wm::extract_bundle(&bundle.path, &tor_dir)?;
             fs::create_dir_all(&data_dir).map_err(fsutil::io_err)?;
             fs::write(&torrc, wm::torrc_text(&data_dir, 9050, 9051)).map_err(fsutil::io_err)?;
@@ -220,25 +256,43 @@ fn setup_install_managed_windows(
                 )));
             }
             let torrc_arg = torrc.to_string_lossy().to_string();
-            wm::spawn_tracked(&exe, &["-f", torrc_arg.as_str()], &tor_pid)?;
+            eprintln!("  Validating Tor configuration...");
+            let check = std::process::Command::new(&exe)
+                .args(["-f", torrc_arg.as_str(), "--verify-config"])
+                .output()
+                .map_err(|err| Error::Io(format!("cannot validate Tor config: {err}")))?;
+            if !check.status.success() {
+                return Err(Error::Verification(format!(
+                    "Tor rejected its configuration ({}): {} {}",
+                    check.status,
+                    String::from_utf8_lossy(&check.stdout).trim(),
+                    String::from_utf8_lossy(&check.stderr).trim()
+                )));
+            }
+            stage!("Starting Tor on SOCKS5 port 9050...");
+            let mut child = wm::spawn_tracked_logged(
+                &exe,
+                &["-f", torrc_arg.as_str()],
+                &tor_pid,
+                &tor_stderr_log,
+            )?;
             started.push(tor_pid.clone());
-            wm::wait_for_socks("127.0.0.1:9050", 60)?;
+            wm::wait_for_socks_with_child(
+                "127.0.0.1:9050",
+                60,
+                &mut child,
+                &tor_stderr_log,
+                &tor_notices,
+            )?;
             Ok(())
         })() {
             rollback_created(&started);
             return Err(e);
         }
-        managed::record_dependency(
-            dir,
-            "tor",
-            "official-download:tor-expert-bundle",
-            wm::TOR_BUNDLE_VERSION,
-            wm::TOR_BUNDLE_SHA256,
-        )?;
-        managed::record_file(dir, &torrc, "", &PathBuf::new())?;
     }
     if !facts.privoxy_installed {
         if let Err(e) = (|| -> Result<()> {
+            stage!("Installing Privoxy through WinGet...");
             winpkg::execute(
                 &winpkg::Action::WingetInstall {
                     package: wm::PRIVOXY_WINGET_ID.into(),
@@ -246,13 +300,15 @@ fn setup_install_managed_windows(
                 &base,
             )?;
             let path_var = env::var_os("PATH").unwrap_or_default();
-            let exe = crate::infrastructure::opencode::find_on_path("privoxy", &path_var)
-                .ok_or_else(|| {
-                    Error::Verification("Privoxy installed but privoxy.exe is not on PATH".into())
-                })?;
+            let exe = wm::find_privoxy_exe(&path_var).ok_or_else(|| {
+                Error::Verification(
+                    "Privoxy was installed but privoxy.exe could not be located; check the WinGet installation path before proceeding".into(),
+                )
+            })?;
             fs::write(&conf, wm::privoxy_conf_text(8118, "127.0.0.1:9050"))
                 .map_err(fsutil::io_err)?;
             let conf_arg = conf.to_string_lossy().to_string();
+            stage!("Starting Privoxy on HTTP port 8118...");
             wm::spawn_tracked(&exe, &[conf_arg.as_str()], &privoxy_pid)?;
             started.push(privoxy_pid.clone());
             wait_for_listener(8118, 30)?;
@@ -261,14 +317,6 @@ fn setup_install_managed_windows(
             rollback_created(&started);
             return Err(e);
         }
-        managed::record_dependency(
-            dir,
-            "privoxy",
-            "winget:Privoxy.Privoxy",
-            "unknown",
-            "package-manager",
-        )?;
-        managed::record_file(dir, &conf, "", &PathBuf::new())?;
     }
     let mcfg = Config {
         privoxy_config: conf.to_string_lossy().to_string(),
@@ -278,8 +326,38 @@ fn setup_install_managed_windows(
             .to_string(),
         ..cfg.clone()
     };
+    stage!("Verifying actual Tor routing (IsTor)...");
     match diagnostics::verify_route_with_timeout(&mcfg, 30) {
         None => {
+            // An incomplete install must not leave a successful ownership
+            // record behind: commit managed metadata only after IsTor=true.
+            let record_result = (|| -> Result<()> {
+                if !facts.tor_installed {
+                    managed::record_dependency(
+                        dir,
+                        "tor",
+                        "official-download:tor-expert-bundle",
+                        wm::TOR_BUNDLE_VERSION,
+                        wm::TOR_BUNDLE_SHA256,
+                    )?;
+                    managed::record_file(dir, &torrc, "", &PathBuf::new())?;
+                }
+                if !facts.privoxy_installed {
+                    managed::record_dependency(
+                        dir,
+                        "privoxy",
+                        "winget:Privoxy.Privoxy",
+                        "unknown",
+                        "package-manager",
+                    )?;
+                    managed::record_file(dir, &conf, "", &PathBuf::new())?;
+                }
+                Ok(())
+            })();
+            if let Err(err) = record_result {
+                rollback_created(&started);
+                return Err(err);
+            }
             say!("setup: managed Tor and Privoxy installed, route verified (IsTor true)");
             Ok(0)
         }
@@ -445,7 +523,7 @@ fn owned_in_state_dir(dir: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    for name in ["rotate.last", managed::RECORD_NAME] {
+    for name in ["rotate.last", "first-run-v1", managed::RECORD_NAME] {
         let path = dir.join(name);
         if path.exists() {
             owned.push(path);

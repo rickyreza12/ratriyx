@@ -56,6 +56,33 @@ pub fn pid_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.pid"))
 }
 
+/// Discover the Privoxy executable after WinGet installs it. Installers
+/// cannot reliably update the running process's PATH, so check standard
+/// machine and per-user locations without scanning arbitrary directories.
+pub fn find_privoxy_exe(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
+    if let Some(found) = crate::infrastructure::opencode::find_on_path("privoxy", path_var) {
+        return Some(found);
+    }
+    #[cfg(windows)]
+    {
+        for name in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            let Some(base) = std::env::var_os(name).filter(|v| !v.is_empty()) else {
+                continue;
+            };
+            let base = PathBuf::from(base);
+            for candidate in [
+                base.join("Privoxy").join("privoxy.exe"),
+                base.join("Programs").join("Privoxy").join("privoxy.exe"),
+            ] {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Ratriyx-managed dependency root. Windows only; elsewhere managed
 /// installs are not implemented (T306/T307).
 pub fn managed_base() -> Option<PathBuf> {
@@ -112,19 +139,97 @@ pub fn extract_bundle(archive: &Path, dest: &Path) -> Result<()> {
     }
 }
 
-/// Waits up to `deadline_secs` for a SOCKS5 greeting. Polls, never hammers:
-/// one attempt per second.
+/// Poll SOCKS5 until ready, printing elapsed time instead of hanging silently.
+#[cfg(test)]
 pub fn wait_for_socks(addr: &str, deadline_secs: u64) -> Result<()> {
+    wait_for_socks_monitor(addr, deadline_secs, None, None, None)
+}
+
+/// Monitor the actual child process as well as its SOCKS5 listener. If Tor
+/// crashes, report the startup stderr immediately instead of waiting 60s.
+pub fn wait_for_socks_with_child(
+    addr: &str,
+    deadline_secs: u64,
+    child: &mut std::process::Child,
+    stderr_log: &Path,
+    tor_log: &Path,
+) -> Result<()> {
+    wait_for_socks_monitor(
+        addr,
+        deadline_secs,
+        Some(child),
+        Some(stderr_log),
+        Some(tor_log),
+    )
+}
+
+fn last_lines(path: &Path) -> String {
+    fs::read_to_string(path)
+        .ok()
+        .map(|text| {
+            let mut tail: Vec<&str> = text.lines().rev().take(4).collect();
+            tail.reverse();
+            tail.join(" | ")
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "no log output captured".into())
+}
+
+fn wait_for_socks_monitor(
+    addr: &str,
+    deadline_secs: u64,
+    mut child: Option<&mut std::process::Child>,
+    stderr_log: Option<&Path>,
+    tor_log: Option<&Path>,
+) -> Result<()> {
     use std::time::{Duration, Instant};
     let start = Instant::now();
+    let mut next_report = 0u64;
+    let mut last_bootstrap = String::new();
     loop {
+        if let Some(handle) = child.as_mut() {
+            if let Some(exit) = handle.try_wait().map_err(io_err)? {
+                let details = stderr_log.map(last_lines).unwrap_or_default();
+                return Err(Error::Verification(format!(
+                    "Tor exited before SOCKS5 started ({exit}); {details}; startup log: {}",
+                    stderr_log.map_or_else(|| "unavailable".into(), |p| p.display().to_string())
+                )));
+            }
+        }
         if crate::infrastructure::network::socks5_greeting(addr).is_ok() {
+            eprintln!(
+                "  [OK] SOCKS5 listener {addr} ready after {}s",
+                start.elapsed().as_secs()
+            );
             return Ok(());
         }
-        if start.elapsed() >= Duration::from_secs(deadline_secs) {
+        let elapsed = start.elapsed().as_secs();
+        if elapsed >= deadline_secs {
+            let stderr = stderr_log.map(last_lines).unwrap_or_default();
+            let notices = tor_log.map(last_lines).unwrap_or_default();
             return Err(Error::Verification(format!(
-                "no SOCKS5 answer at {addr} after {deadline_secs}s; refusing to continue"
+                "no SOCKS5 answer at {addr} after {deadline_secs}s; refusing to continue. \
+Tor stderr: {stderr}; Tor notices: {notices}; startup log: {}",
+                stderr_log.map_or_else(|| "unavailable".into(), |p| p.display().to_string())
             )));
+        }
+        if elapsed >= next_report {
+            eprintln!("  Waiting for Tor SOCKS5... {elapsed}/{deadline_secs}s");
+            if let Some(log) = tor_log {
+                if let Ok(contents) = fs::read_to_string(log) {
+                    if let Some(line) = contents
+                        .lines()
+                        .rev()
+                        .find(|line| line.contains("Bootstrapped "))
+                    {
+                        if line != last_bootstrap {
+                            eprintln!("  Tor: {}", line.trim());
+                            last_bootstrap = line.to_string();
+                        }
+                    }
+                }
+            }
+            next_report = elapsed + 5;
         }
         std::thread::sleep(Duration::from_secs(1));
     }
@@ -149,6 +254,42 @@ pub fn spawn_tracked(exe: &Path, args: &[&str], pid_file: &Path) -> Result<u32> 
     fs::write(pid_file, pid.to_string()).map_err(io_err)?;
     std::mem::forget(child);
     Ok(pid)
+}
+
+/// Start a tracked process with durable, Ratriyx-owned stdout/stderr logs.
+/// The caller keeps the Child handle to detect an early process exit.
+pub fn spawn_tracked_logged(
+    exe: &Path,
+    args: &[&str],
+    pid_file: &Path,
+    log_path: &Path,
+) -> Result<std::process::Child> {
+    if let Some(parent) = pid_file.parent() {
+        fs::create_dir_all(parent).map_err(io_err)?;
+    }
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).map_err(io_err)?;
+    }
+    let log = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(log_path)
+        .map_err(io_err)?;
+    let stdout = log.try_clone().map_err(io_err)?;
+    let mut child = Command::new(exe)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(stdout))
+        .stderr(std::process::Stdio::from(log))
+        .spawn()
+        .map_err(|e| Error::Io(format!("cannot start {}: {e}", exe.display())))?;
+    if let Err(err) = fs::write(pid_file, child.id().to_string()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io_err(err));
+    }
+    Ok(child)
 }
 
 fn pid_alive(pid: u32) -> bool {
@@ -282,6 +423,24 @@ mod tests {
         }
         assert!(found);
         assert!(extract_bundle(&archive, &dest).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exited_child_is_reported_without_waiting_for_timeout() {
+        let dir = std::env::temp_dir().join(format!("ratriyx-early-exit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let pid = dir.join("child.pid");
+        let log = dir.join("child.log");
+        let (exe, args): (&str, &[&str]) = if cfg!(windows) {
+            ("cmd", &["/C", "exit", "9"])
+        } else {
+            ("sh", &["-c", "exit 9"])
+        };
+        let mut child = spawn_tracked_logged(Path::new(exe), args, &pid, &log).unwrap();
+        let err = wait_for_socks_with_child("127.0.0.1:1", 5, &mut child, &log, &log).unwrap_err();
+        assert!(err.to_string().contains("Tor exited"));
         let _ = fs::remove_dir_all(&dir);
     }
 

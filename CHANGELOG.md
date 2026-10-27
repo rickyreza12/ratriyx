@@ -4,6 +4,18 @@ All notable changes to Ratriyx are recorded here.
 
 ## 0.2.0 (unreleased)
 
+### First-run onboarding (new)
+
+- Windows installer now streams curl download progress and WinGet messages, prints six numbered setup stages and SOCKS5 elapsed time, and reads Tor bootstrap notices when available.
+- Tor early exit and timeout errors include the last startup logs; standard error is preserved in the Ratriyx state directory after rollback.
+- Rollback never deletes a pre-existing managed directory or config, and ownership records are only committed after successful IsTor verification.
+
+- Interactive bare-command wizard offers Tor/Privoxy installation only after showing the managed installation plan and receiving explicit yes. Non-interactive calls still show help and never install software.
+- Persist a first-run configured/skipped marker in Ratriyx-owned state; uninstall clears it.
+- Align Windows defaults with Ratriyx-managed Privoxy and Tor paths while respecting legacy installations; locate Privoxy after WinGet even if PATH has not refreshed.
+- Report unknown Windows service status truthfully; require IsTor verification before claiming already healthy.
+- CI now builds and tests on Windows as well as Ubuntu. Native Windows live acceptance remains pending.
+
 Staged cross-platform release. WSL2 stays the tested target; plain Linux, native Windows (PowerShell 5.1), and macOS are implemented but NOT VERIFIED at runtime.
 
 ### Added

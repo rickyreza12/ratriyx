@@ -20,6 +20,7 @@ mod interface;
 use domain::error::Result;
 use interface::cli::Command;
 use std::env;
+use std::io::IsTerminal;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -34,6 +35,13 @@ fn main() {
 }
 
 fn execute(args: &[String]) -> Result<i32> {
+    // Cargo cannot run a post-install hook. Offer setup only when a person
+    // launches bare `ratriyx` in an interactive terminal; all scripted calls
+    // keep the existing non-interactive behavior.
+    if args.is_empty() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        infrastructure::platform::require_supported(&infrastructure::platform::detect())?;
+        return application::commands::first_run();
+    }
     match interface::cli::parse(args)? {
         Command::Help => {
             show!("{}", interface::cli::HELP);
