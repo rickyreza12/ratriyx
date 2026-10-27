@@ -3,9 +3,9 @@
 use super::maintenance;
 use crate::domain::error::{Error, Result};
 use crate::infrastructure::fsutil::io_err;
-use crate::infrastructure::{managed, shell};
 #[cfg(windows)]
 use crate::infrastructure::{hash::sha256_hex, winmanaged as wm};
+use crate::infrastructure::{managed, shell};
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 #[cfg(windows)]
@@ -49,11 +49,19 @@ pub fn run(yes: bool, remove_tor: bool, remove_privoxy: bool) -> Result<i32> {
     say!("  Ratriyx settings/snapshots: optional");
     say!(
         "  Managed Tor bundle: {}",
-        if owned_tor { "eligible (Ratriyx installed)" } else { "not owned; untouched" }
+        if owned_tor {
+            "eligible (Ratriyx installed)"
+        } else {
+            "not owned; untouched"
+        }
     );
     say!(
         "  Privoxy WinGet package: {}",
-        if owned_privoxy { "eligible (Ratriyx installed)" } else { "not owned; untouched" }
+        if owned_privoxy {
+            "eligible (Ratriyx installed)"
+        } else {
+            "not owned; untouched"
+        }
     );
     say!("  Ratriyx executable: not removed by this command (use cargo uninstall ratriyx).");
 
@@ -150,17 +158,27 @@ fn owned_paths() -> Result<(PathBuf, PathBuf)> {
     let base = wm::managed_base()
         .ok_or_else(|| Error::Config("LOCALAPPDATA unavailable; refusing cleanup".into()))?;
     let canonical_base = fs::canonicalize(&base).map_err(|e| {
-        Error::Io(format!("cannot verify managed root {}: {e}", base.display()))
+        Error::Io(format!(
+            "cannot verify managed root {}: {e}",
+            base.display()
+        ))
     })?;
-    if fs::symlink_metadata(&base).map_err(io_err)?.file_type().is_symlink() {
-        return Err(Error::Verification("managed dependency root is a symlink; refusing cleanup".into()));
+    if fs::symlink_metadata(&base)
+        .map_err(io_err)?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(Error::Verification(
+            "managed dependency root is a symlink; refusing cleanup".into(),
+        ));
     }
     Ok((base, canonical_base))
 }
 
 #[cfg(windows)]
 fn remove_privoxy_owned(state: &Path) -> Result<()> {
-    let rec = managed::load(state)?.ok_or_else(|| Error::Config("ownership record missing".into()))?;
+    let rec =
+        managed::load(state)?.ok_or_else(|| Error::Config("ownership record missing".into()))?;
     if !owns(&rec, "privoxy", "winget:Privoxy.Privoxy") {
         return Err(Error::Verification("Privoxy is not Ratriyx-owned".into()));
     }
@@ -177,9 +195,14 @@ fn remove_privoxy_owned(state: &Path) -> Result<()> {
     }
     let pid = wm::pid_path(state, "privoxy");
     if pid.exists() {
-        let exe = wm::find_privoxy_exe(&std::env::var_os("PATH").unwrap_or_default()).ok_or_else(|| {
-            Error::Verification("cannot locate the exact Privoxy executable for PID identity verification".into())
-        })?;
+        let exe = wm::find_privoxy_exe(&std::env::var_os("PATH").unwrap_or_default()).ok_or_else(
+            || {
+                Error::Verification(
+                    "cannot locate the exact Privoxy executable for PID identity verification"
+                        .into(),
+                )
+            },
+        )?;
         say!("  Stopping Ratriyx-tracked Privoxy...");
         say!("{}", wm::stop_tracked_verified(&pid, &exe)?);
     }
@@ -219,11 +242,17 @@ fn remove_tor_owned(state: &Path, original_record: &managed::Record) -> Result<(
     let torrc = tor_dir.join("torrc");
     let pid = wm::pid_path(state, "tor");
     if tor_dir.exists() {
-        if fs::symlink_metadata(&tor_dir).map_err(io_err)?.file_type().is_symlink()
-            || !fs::canonicalize(&tor_dir).map_err(io_err)?.starts_with(&canonical_base)
+        if fs::symlink_metadata(&tor_dir)
+            .map_err(io_err)?
+            .file_type()
+            .is_symlink()
+            || !fs::canonicalize(&tor_dir)
+                .map_err(io_err)?
+                .starts_with(&canonical_base)
         {
             return Err(Error::Verification(
-                "managed Tor directory is a link or escapes its expected root; refusing removal".into()
+                "managed Tor directory is a link or escapes its expected root; refusing removal"
+                    .into(),
             ));
         }
     }
@@ -241,7 +270,11 @@ fn remove_tor_owned(state: &Path, original_record: &managed::Record) -> Result<(
     let archive_name = wm::TOR_BUNDLE_URL.rsplit('/').next().unwrap_or("");
     let archive = base.join(archive_name);
     if archive.is_file() {
-        if let Some(dep) = original_record.dependencies.iter().find(|d| d.name == "tor") {
+        if let Some(dep) = original_record
+            .dependencies
+            .iter()
+            .find(|d| d.name == "tor")
+        {
             let bytes = fs::read(&archive).map_err(io_err)?;
             if sha256_hex(&bytes) == dep.sha256 {
                 fs::remove_file(&archive).map_err(io_err)?;
