@@ -195,17 +195,38 @@ fn setup_install_managed_windows(
     let torrc = tor_dir.join("torrc");
     let conf = base.join("privoxy.conf");
     let tor_pid = wm::pid_path(dir, "tor");
+    let tor_stderr_log = dir.join("setup-tor-stderr.log");
+    let tor_notices = data_dir.join("tor.log");
+    let tor_dir_preexisting = tor_dir.exists();
+    let conf_preexisting = conf.exists();
     let privoxy_pid = wm::pid_path(dir, "privoxy");
     let rollback_created = |started: &[PathBuf]| {
         for pid in started.iter().rev() {
             let _ = wm::stop_tracked(pid);
         }
-        let _ = fs::remove_dir_all(&tor_dir);
-        let _ = fs::remove_file(&conf);
+        eprintln!("  [ROLLBACK] Stopping only processes started by this setup");
+        if !tor_dir_preexisting {
+            let _ = fs::remove_dir_all(&tor_dir);
+        }
+        if !conf_preexisting {
+            let _ = fs::remove_file(&conf);
+        }
+        eprintln!("  Tor startup stderr was preserved: {}", tor_stderr_log.display());
     };
     let mut started: Vec<PathBuf> = Vec::new();
+    let total = (if !facts.tor_installed { 3 } else { 0 })
+        + (if !facts.privoxy_installed { 2 } else { 0 })
+        + 1;
+    let mut step = 0usize;
+    macro_rules! stage {
+        ($message:expr) => {{
+            step += 1;
+            eprintln!("[{step}/{total}] {}", $message);
+        }};
+    }
     // Tor first: Privoxy needs it.
     if !facts.tor_installed {
+        stage!("Downloading and verifying Tor...");
         let bundle = winpkg::execute(
             &winpkg::Action::Fetch {
                 url: wm::TOR_BUNDLE_URL.into(),
@@ -214,6 +235,7 @@ fn setup_install_managed_windows(
             &base,
         )?;
         if let Err(e) = (|| -> Result<()> {
+            stage!("Extracting Tor and writing configuration...");
             wm::extract_bundle(&bundle.path, &tor_dir)?;
             fs::create_dir_all(&data_dir).map_err(fsutil::io_err)?;
             fs::write(&torrc, wm::torrc_text(&data_dir, 9050, 9051)).map_err(fsutil::io_err)?;
@@ -225,9 +247,21 @@ fn setup_install_managed_windows(
                 )));
             }
             let torrc_arg = torrc.to_string_lossy().to_string();
-            wm::spawn_tracked(&exe, &["-f", torrc_arg.as_str()], &tor_pid)?;
+            stage!("Starting Tor on SOCKS5 port 9050...");
+            let mut child = wm::spawn_tracked_logged(
+                &exe,
+                &["-f", torrc_arg.as_str()],
+                &tor_pid,
+                &tor_stderr_log,
+            )?;
             started.push(tor_pid.clone());
-            wm::wait_for_socks("127.0.0.1:9050", 60)?;
+            wm::wait_for_socks_with_child(
+                "127.0.0.1:9050",
+                60,
+                &mut child,
+                &tor_stderr_log,
+                &tor_notices,
+            )?;
             Ok(())
         })() {
             rollback_created(&started);
@@ -244,6 +278,7 @@ fn setup_install_managed_windows(
     }
     if !facts.privoxy_installed {
         if let Err(e) = (|| -> Result<()> {
+            stage!("Installing Privoxy through WinGet...");
             winpkg::execute(
                 &winpkg::Action::WingetInstall {
                     package: wm::PRIVOXY_WINGET_ID.into(),
@@ -259,6 +294,7 @@ fn setup_install_managed_windows(
             fs::write(&conf, wm::privoxy_conf_text(8118, "127.0.0.1:9050"))
                 .map_err(fsutil::io_err)?;
             let conf_arg = conf.to_string_lossy().to_string();
+            stage!("Starting Privoxy on HTTP port 8118...");
             wm::spawn_tracked(&exe, &[conf_arg.as_str()], &privoxy_pid)?;
             started.push(privoxy_pid.clone());
             wait_for_listener(8118, 30)?;
@@ -284,6 +320,7 @@ fn setup_install_managed_windows(
             .to_string(),
         ..cfg.clone()
     };
+    stage!("Verifying actual Tor routing (IsTor)...");
     match diagnostics::verify_route_with_timeout(&mcfg, 30) {
         None => {
             say!("setup: managed Tor and Privoxy installed, route verified (IsTor true)");
