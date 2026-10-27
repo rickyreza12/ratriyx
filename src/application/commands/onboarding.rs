@@ -28,7 +28,10 @@ fn ask<R: BufRead, W: Write>(reader: &mut R, writer: &mut W) -> Result<bool> {
     writer.flush().map_err(fsutil::io_err)?;
     let mut response = String::new();
     reader.read_line(&mut response).map_err(fsutil::io_err)?;
-    Ok(matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        response.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Called only from an interactive, no-argument invocation of the CLI.
@@ -44,7 +47,10 @@ pub fn run(cfg: &Config) -> Result<i32> {
     say!("First-run setup (no changes without your approval).");
     let facts = setup::gather(&path_var(), cfg);
     say!("  Platform: {}", facts.platform);
-    say!("  Tor on PATH: {}", if facts.tor_installed { "yes" } else { "no" });
+    say!(
+        "  Tor on PATH: {}",
+        if facts.tor_installed { "yes" } else { "no" }
+    );
     say!(
         "  Privoxy on PATH: {}",
         if facts.privoxy_installed { "yes" } else { "no" }
@@ -116,10 +122,8 @@ mod tests {
 
     #[test]
     fn choice_marker_keeps_success_and_skip_distinct() {
-        let root = std::env::temp_dir().join(format!(
-            "ratriyx-onboarding-test-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("ratriyx-onboarding-test-{}", std::process::id()));
         let marker = root.join("first-run-v1");
         let _ = fs::remove_dir_all(&root);
         remember(&marker, "skipped\n").unwrap();
