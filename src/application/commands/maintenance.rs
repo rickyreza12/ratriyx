@@ -196,7 +196,9 @@ fn setup_install_managed_windows(
     let conf = base.join("privoxy.conf");
     let tor_pid = wm::pid_path(dir, "tor");
     let tor_stderr_log = dir.join("setup-tor-stderr.log");
-    let tor_notices = data_dir.join("tor.log");
+    // Tor writes notices to stderr; the launcher persists both startup
+    // diagnostics and bootstrap updates in this Ratriyx-owned log.
+    let tor_notices = tor_stderr_log.clone();
     let tor_dir_preexisting = tor_dir.exists();
     let conf_preexisting = conf.exists();
     let privoxy_pid = wm::pid_path(dir, "privoxy");
@@ -205,12 +207,6 @@ fn setup_install_managed_windows(
             let _ = wm::stop_tracked(pid);
         }
         eprintln!("  [ROLLBACK] Stopping only processes started by this setup");
-        if tor_notices.is_file() {
-            let retained = dir.join("setup-tor-notices.log");
-            if fs::copy(&tor_notices, &retained).is_ok() {
-                eprintln!("  Tor notices preserved: {}", retained.display());
-            }
-        }
         if !tor_dir_preexisting {
             let _ = fs::remove_dir_all(&tor_dir);
         }
