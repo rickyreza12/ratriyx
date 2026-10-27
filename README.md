@@ -27,6 +27,8 @@ packages installed separately. A real Windows managed installation successfully 
 
 ## Upcoming v0.3.0 Windows terminal installer
 
+The Windows managed installer now waits for Tor network bootstrap to reach 100% before making its external IsTor request, with a bounded five-minute bootstrap window and live percentage updates. A ready SOCKS5 listener alone does not mean usable Tor circuits exist. Failed network verification stops only newly started processes and preserves owned Tor data for retry.
+
 The Windows managed installer now uses Ratatui when launched from an interactive terminal. It shows a complete setup pipeline, verified-stage progress bars for Tor, Privoxy and route checks, and a live operation indicator. Curl exposes actual Tor download percentages. WinGet does not provide a reliable percentage for Privoxy installation, so Ratatui shows elapsed-time activity and live installer messages instead of an invented percentage. Existing Privoxy installations, including unknown-version WinGet registrations, are reused rather than upgraded automatically.
 
 For command scripts, redirected output, or legacy terminals, the installer keeps a normal text-only fallback. Set RATRIYX_NO_TUI=1 to disable Ratatui explicitly, or NO_COLOR=1 to disable colors and fullscreen UI. No install or package upgrade happens without the normal approval flag.

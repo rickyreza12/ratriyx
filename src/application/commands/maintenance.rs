@@ -264,13 +264,15 @@ fn setup_install_managed_windows_inner(
             plan.join("\n  ")
         )));
     }
-    let total = (if install_tor { 3 } else { 1 }) + (if install_privoxy { 2 } else { 1 }) + 1;
+    // Include Tor network bootstrap as its own verified stage.
+    let total = (if install_tor { 3 } else { 1 }) + (if install_privoxy { 2 } else { 1 }) + 2;
     let mut step_names = Vec::new();
     if install_tor {
         step_names.push("Downloading and verifying Tor".into());
         step_names.push("Extracting Tor and writing configuration".into());
     }
     step_names.push("Starting Tor SOCKS5".into());
+    step_names.push("Bootstrapping Tor network to 100%".into());
     if install_privoxy {
         step_names.push("Installing Privoxy through WinGet".into());
     }
@@ -292,12 +294,12 @@ fn setup_install_managed_windows_inner(
         crate::interface::terminal::install_log(
             "Rolling back only processes started by this setup",
         );
-        if !tor_dir_preexisting {
-            let _ = fs::remove_dir_all(&tor_dir);
-        }
-        if !conf_preexisting {
-            let _ = fs::remove_file(&conf);
-        }
+        // Do NOT delete downloaded/extracted Tor or its partially loaded
+        // consensus on a slow-network verification failure: the next
+        // attempt can reuse its existing data and cached descriptors.
+        crate::interface::terminal::install_log(
+            "Retaining Ratriyx-managed Tor and Privoxy files for safe retry",
+        );
         crate::interface::terminal::install_log(&format!(
             "Tor startup stderr preserved: {}",
             tor_stderr_log.display()
@@ -321,8 +323,22 @@ fn setup_install_managed_windows_inner(
             wm::extract_bundle(&bundle.path, &tor_dir)?;
             fs::create_dir_all(&data_dir).map_err(fsutil::io_err)?;
             fs::write(&torrc, wm::torrc_text(&data_dir, 9050, 9051)).map_err(fsutil::io_err)?;
+            // Ownership describes actual files installed, not whether routing
+            // has already succeeded. Persist this BEFORE network bootstrap.
+            managed::stamp(dir)?;
+            managed::record_dependency(
+                dir,
+                "tor",
+                "official-download:tor-expert-bundle",
+                wm::TOR_BUNDLE_VERSION,
+                wm::TOR_BUNDLE_SHA256,
+            )?;
+            managed::record_file(dir, &torrc, "", &PathBuf::new())?;
             Ok(())
         })() {
+            if !torrc.exists() && !tor_dir_preexisting {
+                let _ = fs::remove_dir_all(&tor_dir);
+            }
             rollback_created(&started);
             return Err(error);
         }
@@ -359,6 +375,9 @@ fn setup_install_managed_windows_inner(
             &tor_notices,
         )?;
         crate::interface::terminal::install_done("Tor SOCKS5 port 9050 ready");
+        stage!("Bootstrapping Tor network to 100%");
+        wm::wait_for_bootstrap_with_child(&mut child, &tor_stderr_log, 300)?;
+        crate::interface::terminal::install_done("Tor circuit bootstrap reached 100%");
         Ok(())
     })() {
         rollback_created(&started);
@@ -375,6 +394,16 @@ fn setup_install_managed_windows_inner(
                     package: wm::PRIVOXY_WINGET_ID.into(),
                 },
                 &base,
+            )?;
+            // WinGet has already installed the package. Record its ownership
+            // even if subsequent start/IsTor verification fails.
+            managed::stamp(dir)?;
+            managed::record_dependency(
+                dir,
+                "privoxy",
+                "winget:Privoxy.Privoxy",
+                "unknown",
+                "package-manager",
             )?;
             privoxy_exe = wm::find_privoxy_exe(&path_var);
             if privoxy_exe.is_none() {
@@ -397,6 +426,8 @@ fn setup_install_managed_windows_inner(
         if !conf.exists() {
             fs::write(&conf, wm::privoxy_conf_text(8118, "127.0.0.1:9050"))
                 .map_err(fsutil::io_err)?;
+            managed::stamp(dir)?;
+            managed::record_file(dir, &conf, "", &PathBuf::new())?;
         }
         let conf_arg = conf.to_string_lossy().to_string();
         wm::spawn_tracked(exe, &[conf_arg.as_str()], &privoxy_pid)?;
@@ -419,36 +450,6 @@ fn setup_install_managed_windows_inner(
     stage!("Verifying actual Tor routing (IsTor)...");
     match diagnostics::verify_route_with_timeout(&mcfg, 30) {
         None => {
-            let record_result = (|| -> Result<()> {
-                managed::stamp(dir)?;
-                if install_tor {
-                    managed::record_dependency(
-                        dir,
-                        "tor",
-                        "official-download:tor-expert-bundle",
-                        wm::TOR_BUNDLE_VERSION,
-                        wm::TOR_BUNDLE_SHA256,
-                    )?;
-                    managed::record_file(dir, &torrc, "", &PathBuf::new())?;
-                }
-                if install_privoxy {
-                    managed::record_dependency(
-                        dir,
-                        "privoxy",
-                        "winget:Privoxy.Privoxy",
-                        "unknown",
-                        "package-manager",
-                    )?;
-                }
-                if !conf_preexisting {
-                    managed::record_file(dir, &conf, "", &PathBuf::new())?;
-                }
-                Ok(())
-            })();
-            if let Err(error) = record_result {
-                rollback_created(&started);
-                return Err(error);
-            }
             crate::interface::terminal::install_done("IsTor=true; route verified");
             crate::interface::terminal::install_success(total);
             Ok(0)
@@ -456,7 +457,8 @@ fn setup_install_managed_windows_inner(
         Some(reason) => {
             rollback_created(&started);
             Err(Error::Verification(format!(
-                "Tor routing did not verify ({reason}); started processes were stopped"
+                "Tor bootstrapped 100% and both proxy listeners started, but external IsTor verification via Privoxy failed ({reason}); started processes were stopped. Tor log: {}. Check access to https://check.torproject.org/api/ip through the proxy. Owned installation files remain for a retry.",
+                tor_stderr_log.display()
             )))
         }
     }

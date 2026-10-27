@@ -34,8 +34,12 @@ pub fn torrc_text(data_dir: &Path, socks_port: u16, control_port: u16) -> String
          ControlPort 127.0.0.1:{control_port}\n\
          CookieAuthentication 1\n\
          DataDirectory \"{}\"\n\
+         GeoIPFile \"{}\"\n\
+         GeoIPv6File \"{}\"\n\
          Log notice stderr\n",
         torrc_path(data_dir),
+        torrc_path(&data_dir.join("geoip")),
+        torrc_path(&data_dir.join("geoip6")),
     )
 }
 
@@ -286,6 +290,70 @@ Tor stderr: {stderr}; Tor notices: {notices}; startup log: {}",
 
 /// Starts `exe` detached enough to outlive the setup command and records its
 /// PID. The caller owns verification that the daemon came up.
+/// Tor's SOCKS listener comes up before its circuits are usable. Parse the
+/// latest milestone rather than treating an open socket as bootstrap success.
+#[cfg(any(windows, test))]
+pub fn bootstrap_percent(log: &str) -> Option<u8> {
+    log.lines().rev().find_map(|line| {
+        let percentage = line.split_once("Bootstrapped ")?.1.split_once('%')?.0;
+        percentage.parse::<u8>().ok().filter(|p| *p <= 100)
+    })
+}
+
+#[cfg(windows)]
+pub fn wait_for_bootstrap_with_child(
+    child: &mut std::process::Child,
+    log: &Path,
+    deadline_secs: u64,
+) -> Result<()> {
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    let mut previous = None;
+    let mut next_heartbeat = 0;
+    loop {
+        if let Some(exit) = child.try_wait().map_err(io_err)? {
+            return Err(Error::Verification(format!(
+                "Tor exited before bootstrap 100% ({exit}); last notices: {}; log: {}",
+                last_lines(log),
+                log.display()
+            )));
+        }
+        let progress = fs::read_to_string(log)
+            .ok()
+            .and_then(|contents| bootstrap_percent(&contents));
+        if progress != previous {
+            if let Some(percent) = progress {
+                crate::interface::terminal::install_log(&format!(
+                    "Tor network bootstrap: {percent}%"
+                ));
+                crate::interface::installer::bootstrap(percent);
+                if percent == 100 {
+                    return Ok(());
+                }
+            }
+            previous = progress;
+        }
+        let elapsed = started.elapsed().as_secs();
+        if elapsed >= deadline_secs {
+            return Err(Error::Verification(format!(
+                "Tor SOCKS5 is listening but the network did not bootstrap to 100% within {deadline_secs}s (latest: {}%). Last notices: {}. Log: {}. This may indicate blocked or slow relays, or network consensus; routing cannot be claimed yet.",
+                progress.unwrap_or(0), last_lines(log), log.display()
+            )));
+        }
+        if elapsed >= next_heartbeat {
+            crate::interface::terminal::install_activity(
+                &format!(
+                    "Tor bootstrap {}% ({elapsed}/{deadline_secs}s)",
+                    progress.unwrap_or(0)
+                ),
+                elapsed,
+            );
+            next_heartbeat = elapsed + 5;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
 pub fn spawn_tracked(exe: &Path, args: &[&str], pid_file: &Path) -> Result<u32> {
     if let Some(parent) = pid_file.parent() {
         if !parent.as_os_str().is_empty() {
@@ -486,6 +554,8 @@ mod tests {
         assert!(text.contains("ControlPort 127.0.0.1:9051"));
         assert!(text.contains("CookieAuthentication 1"));
         assert!(text.contains(r#"DataDirectory "C:/My Dir/Tor Data""#));
+        assert!(text.contains(r#"GeoIPFile "C:/My Dir/Tor Data/geoip""#));
+        assert!(text.contains(r#"GeoIPv6File "C:/My Dir/Tor Data/geoip6""#));
         assert!(text.contains("Log notice stderr"));
         assert!(!text.contains("Log notice file"));
         assert!(!text.contains("C:\\My Dir"));
@@ -630,6 +700,21 @@ mod tests {
 Privoxy (remove only) Privoxy.Privoxy Unknown 4.1.0     winget";
         assert!(installed_package_row(example, "Privoxy.Privoxy"));
         assert!(!installed_package_row(example, "Other.Package"));
+    }
+
+    #[test]
+    fn bootstrap_parser_reads_latest_milestone() {
+        assert_eq!(bootstrap_percent(""), None);
+        assert_eq!(bootstrap_percent("Bootstrapped 20% (onehop)"), Some(20));
+        assert_eq!(
+            bootstrap_percent("Bootstrapped 100% (done)\nBootstrapped 30% (retry)"),
+            Some(30)
+        );
+        assert_eq!(
+            bootstrap_percent("Bootstrapped 30% (loading)\n[warn] trying relay"),
+            Some(30)
+        );
+        assert_eq!(bootstrap_percent("Bootstrapped 250% (bad)"), None);
     }
 
     #[test]

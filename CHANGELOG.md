@@ -9,6 +9,10 @@ All notable changes to Ratriyx are recorded here.
 - Added a Ratatui interactive Windows installer with total-stage and separate Tor, Privoxy and routing progress bars, streamed WinGet output, real Tor transfer percentage and indeterminate activity feedback for operations without percentage APIs.
 - Reuses already-installed Privoxy even if it is not on PATH and WinGet reports an Unknown version. Never forces an unrequested upgrade.
 - Reuses intact Ratriyx-managed Tor binaries and its configuration across reinstall attempts; refuses incomplete or unowned directories.
+- Waits for the actual Tor network bootstrap to reach 100% (up to five minutes) before checking the external IsTor service; displays real bootstrap percentages. Startup errors include the last Tor milestone and saved log path.
+- Keeps verified, owned Tor/Privoxy files, downloaded consensus and package ownership metadata after network verification failures for resumable retries; rolls back only the processes started by that attempt.
+- Explicitly points Tor to the GeoIP/GeoIPv6 files supplied in the official expert bundle to avoid ambiguous default paths.
+- Windows live acceptance completed: fresh Tor bootstrap from 0% to 100%, Privoxy listener, IsTor=true, doctor 8 pass/0 fail, repeat setup idempotent.
 - Continues to fail closed when ports are occupied or a configuration is unexpectedly edited. Only newly installed dependencies are recorded as owned.
 - Improved Windows setup discovery, human-readable recovery hints and terminal experience; plain, redirected and machine-readable output remain supported.
 - Increased minimum Rust version to 1.88 due to Ratatui dependency requirements. Ratatui UI can be disabled with RATRIYX_NO_TUI or NO_COLOR.

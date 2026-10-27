@@ -26,6 +26,7 @@ enum Event {
     Done(String),
     Activity(String, u64),
     Download(u8),
+    Bootstrap(u8),
     Log(String),
     Stop,
 }
@@ -69,6 +70,10 @@ pub fn download(percent: u8) -> bool {
     send(Event::Download(percent))
 }
 
+pub fn bootstrap(percent: u8) -> bool {
+    send(Event::Bootstrap(percent))
+}
+
 pub fn log(message: &str) -> bool {
     send(Event::Log(message.into()))
 }
@@ -90,6 +95,7 @@ struct Dashboard {
     labels: Vec<String>,
     current_since: Option<Instant>,
     download: Option<u8>,
+    bootstrap: Option<u8>,
     activity: String,
     logs: VecDeque<String>,
     tick: usize,
@@ -115,6 +121,7 @@ impl Dashboard {
                 }
                 self.current_since = Some(Instant::now());
                 self.download = None;
+                self.bootstrap = None;
                 self.activity = name;
             }
             Event::Done(message) => {
@@ -129,6 +136,9 @@ impl Dashboard {
             }
             Event::Download(percent) => {
                 self.download = Some(percent.min(100));
+            }
+            Event::Bootstrap(percent) => {
+                self.bootstrap = Some(percent.min(100));
             }
             Event::Log(message) => self.push_log(message),
             Event::Stop => return false,
@@ -308,7 +318,9 @@ fn draw(frame: &mut Frame, state: &Dashboard) {
     let elapsed = state
         .current_since
         .map_or(0, |time| time.elapsed().as_secs());
-    let live_label = if let Some(percent) = state.download {
+    let live_label = if let Some(percent) = state.bootstrap {
+        format!("Tor bootstrap {percent}% | {spinner} {elapsed}s")
+    } else if let Some(percent) = state.download {
         format!("Tor transfer {percent}% | {spinner} {elapsed}s")
     } else {
         format!("{spinner} {} | {elapsed}s", state.activity)
@@ -321,7 +333,12 @@ fn draw(frame: &mut Frame, state: &Dashboard) {
                     .title(" CURRENT OPERATION "),
             )
             .gauge_style(Style::default().fg(Color::LightBlue))
-            .ratio(state.download.map_or(0.0, |p| f64::from(p) / 100.0))
+            .ratio(
+                state
+                    .bootstrap
+                    .or(state.download)
+                    .map_or(0.0, |p| f64::from(p) / 100.0),
+            )
             .label(live_label),
         rows[4],
     );
