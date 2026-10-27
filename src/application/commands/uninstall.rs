@@ -242,20 +242,18 @@ fn remove_tor_owned(state: &Path, original_record: &managed::Record) -> Result<(
     let tor_dir = base.join("tor");
     let torrc = tor_dir.join("torrc");
     let pid = wm::pid_path(state, "tor");
-    if tor_dir.exists() {
-        if fs::symlink_metadata(&tor_dir)
+    if tor_dir.exists()
+        && (fs::symlink_metadata(&tor_dir)
             .map_err(io_err)?
             .file_type()
             .is_symlink()
             || !fs::canonicalize(&tor_dir)
                 .map_err(io_err)?
-                .starts_with(&canonical_base)
-        {
-            return Err(Error::Verification(
-                "managed Tor directory is a link or escapes its expected root; refusing removal"
-                    .into(),
-            ));
-        }
+                .starts_with(&canonical_base))
+    {
+        return Err(Error::Verification(
+            "managed Tor directory is a link or escapes its expected root; refusing removal".into(),
+        ));
     }
     if pid.exists() {
         let exe = tor_dir.join("Tor").join("tor.exe");
