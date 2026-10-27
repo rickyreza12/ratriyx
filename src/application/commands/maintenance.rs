@@ -267,14 +267,6 @@ fn setup_install_managed_windows(
             rollback_created(&started);
             return Err(e);
         }
-        managed::record_dependency(
-            dir,
-            "tor",
-            "official-download:tor-expert-bundle",
-            wm::TOR_BUNDLE_VERSION,
-            wm::TOR_BUNDLE_SHA256,
-        )?;
-        managed::record_file(dir, &torrc, "", &PathBuf::new())?;
     }
     if !facts.privoxy_installed {
         if let Err(e) = (|| -> Result<()> {
@@ -303,14 +295,6 @@ fn setup_install_managed_windows(
             rollback_created(&started);
             return Err(e);
         }
-        managed::record_dependency(
-            dir,
-            "privoxy",
-            "winget:Privoxy.Privoxy",
-            "unknown",
-            "package-manager",
-        )?;
-        managed::record_file(dir, &conf, "", &PathBuf::new())?;
     }
     let mcfg = Config {
         privoxy_config: conf.to_string_lossy().to_string(),
@@ -323,6 +307,35 @@ fn setup_install_managed_windows(
     stage!("Verifying actual Tor routing (IsTor)...");
     match diagnostics::verify_route_with_timeout(&mcfg, 30) {
         None => {
+            // An incomplete install must not leave a successful ownership
+            // record behind: commit managed metadata only after IsTor=true.
+            let record_result = (|| -> Result<()> {
+                if !facts.tor_installed {
+                    managed::record_dependency(
+                        dir,
+                        "tor",
+                        "official-download:tor-expert-bundle",
+                        wm::TOR_BUNDLE_VERSION,
+                        wm::TOR_BUNDLE_SHA256,
+                    )?;
+                    managed::record_file(dir, &torrc, "", &PathBuf::new())?;
+                }
+                if !facts.privoxy_installed {
+                    managed::record_dependency(
+                        dir,
+                        "privoxy",
+                        "winget:Privoxy.Privoxy",
+                        "unknown",
+                        "package-manager",
+                    )?;
+                    managed::record_file(dir, &conf, "", &PathBuf::new())?;
+                }
+                Ok(())
+            })();
+            if let Err(err) = record_result {
+                rollback_created(&started);
+                return Err(err);
+            }
             say!("setup: managed Tor and Privoxy installed, route verified (IsTor true)");
             Ok(0)
         }
