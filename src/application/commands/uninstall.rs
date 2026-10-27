@@ -204,7 +204,7 @@ fn remove_privoxy_owned(state: &Path) -> Result<()> {
             },
         )?;
         say!("  Stopping Ratriyx-tracked Privoxy...");
-        say!("{}", wm::stop_tracked_verified(&pid, &exe)?);
+        say!("{}", wm::stop_tracked_verified(&pid, &exe, &conf)?);
     }
     say!("  Uninstalling Ratriyx-installed Privoxy through WinGet...");
     let status = std::process::Command::new("winget.exe")
@@ -260,7 +260,7 @@ fn remove_tor_owned(state: &Path, original_record: &managed::Record) -> Result<(
     if pid.exists() {
         let exe = tor_dir.join("Tor").join("tor.exe");
         say!("  Stopping Ratriyx-tracked Tor...");
-        say!("{}", wm::stop_tracked_verified(&pid, &exe)?);
+        say!("{}", wm::stop_tracked_verified(&pid, &exe, &torrc)?);
     }
     if tor_dir.is_dir() {
         say!("  Removing Ratriyx-managed Tor files and data...");
@@ -320,6 +320,9 @@ mod tests {
             sha256: "abc".into(),
         });
         assert!(owns(&rec, "tor", "official-download:tor-expert-bundle"));
+        rec.platform.clear(); // v0.2.0 before setup added platform stamping
+        assert!(owns(&rec, "tor", "official-download:tor-expert-bundle"));
+        rec.platform = "windows".into();
         assert!(!owns(&rec, "privoxy", "winget:Privoxy.Privoxy"));
         assert!(!owns(&rec, "tor", "winget:Tor.Tor"));
         rec.platform = "linux".into();
