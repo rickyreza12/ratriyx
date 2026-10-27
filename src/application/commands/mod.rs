@@ -61,11 +61,12 @@ pub fn dispatch(command: Command) -> Result<i32> {
             remove_managed,
             remove_tor,
             remove_privoxy,
+            remove_untracked_privoxy,
         } => {
             if remove_managed {
                 maintenance::uninstall_remove_managed(yes)
             } else {
-                uninstall::run(yes, remove_tor, remove_privoxy)
+                uninstall::run(yes, remove_tor, remove_privoxy, remove_untracked_privoxy)
             }
         }
         Command::Rotate { yes } => diagnose::rotate(&cfg, yes),

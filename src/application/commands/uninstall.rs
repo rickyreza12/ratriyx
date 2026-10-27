@@ -16,6 +16,7 @@ struct Choices {
     settings: bool,
     tor: bool,
     privoxy: bool,
+    untracked_privoxy: bool,
 }
 
 fn owns(rec: &managed::Record, name: &str, source: &str) -> bool {
@@ -40,11 +41,20 @@ fn ask<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, message: &str) -> R
 /// Running without flags asks separately about settings, Tor, and Privoxy.
 /// --yes without explicit dependency flags removes only Ratriyx settings.
 /// --remove-tor / --remove-privoxy are never implied by --yes.
-pub fn run(yes: bool, remove_tor: bool, remove_privoxy: bool) -> Result<i32> {
+pub fn run(
+    yes: bool,
+    remove_tor: bool,
+    remove_privoxy: bool,
+    remove_untracked_privoxy: bool,
+) -> Result<i32> {
     let state = shell::require_state_dir()?;
     let rec = managed::load(&state)?.unwrap_or_default();
     let owned_tor = owns(&rec, "tor", "official-download:tor-expert-bundle");
     let owned_privoxy = owns(&rec, "privoxy", "winget:Privoxy.Privoxy");
+    #[cfg(windows)]
+    let untracked_privoxy_present = !owned_privoxy && wm::winget_has_package(wm::PRIVOXY_WINGET_ID);
+    #[cfg(not(windows))]
+    let untracked_privoxy_present = false;
     say!("Uninstall preview: only Ratriyx-owned items can be removed.");
     say!("  Ratriyx settings/snapshots: optional");
     say!(
@@ -59,8 +69,10 @@ pub fn run(yes: bool, remove_tor: bool, remove_privoxy: bool) -> Result<i32> {
         "  Privoxy WinGet package: {}",
         if owned_privoxy {
             "eligible (Ratriyx installed)"
+        } else if untracked_privoxy_present {
+            "installed but ownership UNVERIFIED; extra opt-in required"
         } else {
-            "not owned; untouched"
+            "not installed or not Ratriyx-owned; untouched"
         }
     );
     say!("  Ratriyx executable: not removed by this command (use cargo uninstall ratriyx).");
@@ -71,16 +83,24 @@ pub fn run(yes: bool, remove_tor: bool, remove_privoxy: bool) -> Result<i32> {
         ));
     }
     if remove_privoxy && !owned_privoxy {
-        return Err(Error::Approval(
-            "Privoxy is not recorded as Ratriyx-installed; refusing WinGet uninstall".into(),
-        ));
+        return Err(Error::Approval(if untracked_privoxy_present {
+            "Privoxy.Privoxy is installed but its Ratriyx ownership is unverified; for explicit recovery use `ratriyx uninstall --yes --remove-untracked-privoxy`".into()
+        } else {
+            "Privoxy is not recorded as Ratriyx-installed; refusing WinGet uninstall".into()
+        }));
     }
 
+    if remove_untracked_privoxy && !untracked_privoxy_present {
+        return Err(Error::Approval(
+            "untracked Privoxy.Privoxy is not currently detected. The explicit recovery option cannot remove anything".into(),
+        ));
+    }
     let selected = if yes {
         Choices {
             settings: true,
             tor: remove_tor,
             privoxy: remove_privoxy,
+            untracked_privoxy: remove_untracked_privoxy,
         }
     } else {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -107,10 +127,17 @@ pub fn run(yes: bool, remove_tor: bool, remove_privoxy: bool) -> Result<i32> {
                 &mut output,
                 "Stop and UNINSTALL Ratriyx-installed Privoxy via WinGet? [y/N]: ",
             )?;
+        let untracked_privoxy = untracked_privoxy_present
+            && ask(
+                &mut input,
+                &mut output,
+                "WARNING: Privoxy ownership is UNVERIFIED. Uninstall the exact Privoxy.Privoxy WinGet package anyway? Other apps may depend on it. [y/N]: ",
+            )?;
         Choices {
             settings,
             tor,
             privoxy,
+            untracked_privoxy,
         }
     };
 
@@ -126,13 +153,16 @@ pub fn run(yes: bool, remove_tor: bool, remove_privoxy: bool) -> Result<i32> {
         if selected.privoxy {
             remove_privoxy_owned(&state)?;
         }
+        if selected.untracked_privoxy {
+            remove_untracked_privoxy_package(&state)?;
+        }
         if selected.tor {
             remove_tor_owned(&state, &rec)?;
         }
     }
     #[cfg(not(windows))]
     {
-        if selected.tor || selected.privoxy {
+        if selected.tor || selected.privoxy || selected.untracked_privoxy {
             return Err(Error::Config(
                 "managed dependency removal is only implemented on Windows".into(),
             ));
@@ -141,7 +171,7 @@ pub fn run(yes: bool, remove_tor: bool, remove_privoxy: bool) -> Result<i32> {
 
     if selected.settings {
         maintenance::uninstall(true)?;
-    } else if selected.tor || selected.privoxy {
+    } else if selected.tor || selected.privoxy || selected.untracked_privoxy {
         // A later interactive bare invocation should offer to configure
         // dependencies again, even if the user's other settings remain.
         let marker = state.join("first-run-v1");
@@ -228,6 +258,102 @@ fn remove_privoxy_owned(state: &Path) -> Result<()> {
     }
     managed::forget_dependency(state, "privoxy", &conf)?;
     say!("  [OK] Privoxy removed (Ratriyx-managed package only).");
+    Ok(())
+}
+
+/// Recovery path for packages present in WinGet without a matching ownership
+/// record. Only an explicit recovery flag or a separate interactive Yes can
+/// invoke this; the normal --yes path MUST NOT remove untracked software.
+#[cfg(windows)]
+fn remove_untracked_privoxy_package(state: &Path) -> Result<()> {
+    let rec = managed::load(state)?.unwrap_or_default();
+    if owns(&rec, "privoxy", "winget:Privoxy.Privoxy") {
+        return Err(Error::Approval(
+            "Privoxy is already Ratriyx-owned; use --remove-privoxy instead".into(),
+        ));
+    }
+    if !wm::winget_has_package(wm::PRIVOXY_WINGET_ID) {
+        return Err(Error::Verification(
+            "WinGet cannot confirm an installed Privoxy.Privoxy package; refusing removal".into(),
+        ));
+    }
+    // Never attempt to terminate or uninstall an actively used, untracked
+    // Privoxy process. The user must stop it independently first.
+    let process_check = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process -Filter \"Name = 'privoxy.exe'\" | Select-Object -ExpandProperty ProcessId",
+        ])
+        .output()
+        .map_err(|e| Error::Io(format!("cannot check for untracked Privoxy process: {e}")))?;
+    if !process_check.status.success() {
+        return Err(Error::Verification(
+            "Could not verify whether untracked Privoxy is running; refusing removal".into(),
+        ));
+    }
+    if !String::from_utf8_lossy(&process_check.stdout)
+        .trim()
+        .is_empty()
+    {
+        return Err(Error::Approval(
+            "An untracked Privoxy process is running. Stop it safely before removing the WinGet package".into(),
+        ));
+    }
+
+    let base = wm::managed_base().ok_or_else(|| {
+        Error::Config("LOCALAPPDATA unavailable; cannot verify managed config".into())
+    })?;
+    let conf = base.join("privoxy.conf");
+    let recorded_conf = rec
+        .files
+        .iter()
+        .any(|file| file.path == conf.display().to_string());
+    if recorded_conf && conf.exists() {
+        if fs::symlink_metadata(&conf)
+            .map_err(io_err)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(Error::Verification(
+                "Managed Privoxy configuration is a link; refusing automatic cleanup".into(),
+            ));
+        }
+        if fs::read_to_string(&conf).map_err(io_err)?
+            != wm::privoxy_conf_text(8118, "127.0.0.1:9050")
+        {
+            return Err(Error::Verification(
+                "Managed Privoxy config was modified; refusing automatic cleanup".into(),
+            ));
+        }
+    }
+
+    say!("  Removing explicitly approved, untracked Privoxy.Privoxy package...");
+    let status = std::process::Command::new("winget.exe")
+        .args([
+            "uninstall",
+            "--exact",
+            "--id",
+            wm::PRIVOXY_WINGET_ID,
+            "--silent",
+            "--accept-source-agreements",
+            "--disable-interactivity",
+        ])
+        .status()
+        .map_err(|e| Error::Io(format!("cannot run WinGet uninstall: {e}")))?;
+    if !status.success() || wm::winget_has_package(wm::PRIVOXY_WINGET_ID) {
+        return Err(Error::Verification(format!(
+            "WinGet uninstall did not verify complete ({status}); inspect Privoxy package manually"
+        )));
+    }
+    if recorded_conf {
+        if conf.is_file() {
+            fs::remove_file(&conf).map_err(io_err)?;
+        }
+        managed::forget_dependency(state, "privoxy", &conf)?;
+    }
+    say!("  [OK] Exact Privoxy.Privoxy package removed after untracked-package approval.");
     Ok(())
 }
 

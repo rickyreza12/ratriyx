@@ -19,6 +19,7 @@ USAGE:
   ratriyx service start|stop|restart|status [tor|privoxy] [--yes]
   ratriyx restore [--file PATH] [--yes]
   ratriyx uninstall [--yes] [--remove-tor] [--remove-privoxy]
+  ratriyx uninstall --yes --remove-untracked-privoxy
   ratriyx uninstall --remove-managed [--yes]
   ratriyx rotate [--yes]
   ratriyx config migrate [--yes]
@@ -92,6 +93,7 @@ pub enum Command {
         remove_managed: bool,
         remove_tor: bool,
         remove_privoxy: bool,
+        remove_untracked_privoxy: bool,
     },
     Rotate {
         yes: bool,
@@ -319,20 +321,26 @@ pub fn parse(args: &[String]) -> Result<Command> {
             Ok(Command::Restore { yes, file })
         }
         "uninstall" => {
-            let (mut yes, mut remove_managed, mut remove_tor, mut remove_privoxy) =
-                (false, false, false, false);
+            let (mut yes, mut remove_managed, mut remove_tor, mut remove_privoxy, mut untracked) =
+                (false, false, false, false, false);
             while let Some(arg) = s.take() {
                 match arg {
                     "--yes" => yes = true,
                     "--remove-managed" => remove_managed = true,
                     "--remove-tor" => remove_tor = true,
                     "--remove-privoxy" => remove_privoxy = true,
+                    "--remove-untracked-privoxy" => untracked = true,
                     other => return Err(unknown("uninstall", other)),
                 }
             }
-            if remove_managed && (remove_tor || remove_privoxy) {
+            if remove_managed && (remove_tor || remove_privoxy || untracked) {
                 return Err(Error::Usage(
                     "--remove-managed cannot be combined with dependency uninstall flags".into(),
+                ));
+            }
+            if untracked && (remove_privoxy || !yes) {
+                return Err(Error::Usage(
+                    "--remove-untracked-privoxy requires --yes and cannot be combined with --remove-privoxy".into(),
                 ));
             }
             Ok(Command::Uninstall {
@@ -340,6 +348,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 remove_managed,
                 remove_tor,
                 remove_privoxy,
+                remove_untracked_privoxy: untracked,
             })
         }
         "rotate" => Ok(Command::Rotate {
@@ -437,6 +446,7 @@ mod tests {
                 remove_managed: false,
                 remove_tor: true,
                 remove_privoxy: true,
+                remove_untracked_privoxy: false,
             }
         );
         assert_eq!(
@@ -446,9 +456,28 @@ mod tests {
                 remove_managed: false,
                 remove_tor: false,
                 remove_privoxy: false,
+                remove_untracked_privoxy: false,
             }
         );
         assert!(parse(&argv(&["uninstall", "--remove-managed", "--remove-tor"])).is_err());
+        assert_eq!(
+            parse(&argv(&["uninstall", "--yes", "--remove-untracked-privoxy"])).unwrap(),
+            Command::Uninstall {
+                yes: true,
+                remove_managed: false,
+                remove_tor: false,
+                remove_privoxy: false,
+                remove_untracked_privoxy: true,
+            }
+        );
+        assert!(parse(&argv(&["uninstall", "--remove-untracked-privoxy"])).is_err());
+        assert!(parse(&argv(&[
+            "uninstall",
+            "--yes",
+            "--remove-privoxy",
+            "--remove-untracked-privoxy"
+        ]))
+        .is_err());
     }
 
     #[test]

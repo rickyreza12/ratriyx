@@ -8,6 +8,7 @@ All notable changes to Ratriyx are recorded here.
 
 - Added a Ratatui interactive Windows installer with total-stage and separate Tor, Privoxy and routing progress bars, streamed WinGet output, real Tor transfer percentage and indeterminate activity feedback for operations without percentage APIs.
 - Reuses already-installed Privoxy even if it is not on PATH and WinGet reports an Unknown version. Never forces an unrequested upgrade.
+- Adds separately confirmed untracked Privoxy WinGet cleanup for stale/missing dependency ownership records; normal uninstalls remain ownership-safe.
 - Reuses intact Ratriyx-managed Tor binaries and its configuration across reinstall attempts; refuses incomplete or unowned directories.
 - Waits for the actual Tor network bootstrap to reach 100% (up to five minutes) before checking the external IsTor service; displays real bootstrap percentages. Startup errors include the last Tor milestone and saved log path.
 - Keeps verified, owned Tor/Privoxy files, downloaded consensus and package ownership metadata after network verification failures for resumable retries; rolls back only the processes started by that attempt.
