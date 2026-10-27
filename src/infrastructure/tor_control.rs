@@ -448,8 +448,7 @@ mod tests {
     fn rotate_state_dir_failure_sends_no_newnym() {
         // Cross-platform fixture: a regular file cannot contain rotate.last.
         // The old /proc path only works as an inaccessible parent on Linux.
-        let root =
-            std::env::temp_dir().join(format!("ratriyx-rotate-fail-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ratriyx-rotate-fail-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let blocking_file = root.join("not-a-directory");
