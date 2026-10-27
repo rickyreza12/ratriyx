@@ -97,7 +97,10 @@ pub fn report(facts: &SetupFacts) -> String {
     } else if facts.tor_state.contains("running") {
         let _ = writeln!(out, "  3. Tor already running; nothing to start");
     } else {
-        let _ = writeln!(out, "  3. Tor service state unknown; verify with ratriyx doctor");
+        let _ = writeln!(
+            out,
+            "  3. Tor service state unknown; verify with ratriyx doctor"
+        );
     }
     let _ = writeln!(out, "nothing above runs without your explicit approval");
     out
@@ -143,7 +146,11 @@ mod tests {
 
     #[test]
     fn unknown_service_does_not_claim_tor_running() {
-        let output = report(&facts(false, "desired rule present", "unknown (service manager unavailable)"));
+        let output = report(&facts(
+            false,
+            "desired rule present",
+            "unknown (service manager unavailable)",
+        ));
         assert!(output.contains("Tor service state unknown"));
         assert!(!output.contains("Tor already running"));
     }
