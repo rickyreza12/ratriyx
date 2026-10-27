@@ -211,7 +211,10 @@ fn setup_install_managed_windows(
         if !conf_preexisting {
             let _ = fs::remove_file(&conf);
         }
-        eprintln!("  Tor startup stderr was preserved: {}", tor_stderr_log.display());
+        eprintln!(
+            "  Tor startup stderr was preserved: {}",
+            tor_stderr_log.display()
+        );
     };
     let mut started: Vec<PathBuf> = Vec::new();
     let total = (if !facts.tor_installed { 3 } else { 0 })
