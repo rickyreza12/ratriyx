@@ -24,7 +24,7 @@ requires an explicit `y` or `yes` before proceeding. Declining saves a local
 skip marker; `ratriyx setup --install` remains available later. Calls from
 scripts, CI, and `ratriyx --help` never initiate installation. Windows uses
 a pinned Tor bundle and WinGet Privoxy; Linux/macOS still require system
-packages installed separately. Live Windows installation is not yet accepted.
+packages installed separately. Live Windows installation is not yet accepted. During installation, stderr reports six stages and Tor readiness (up to 60 seconds). If Tor exits or times out, the installer preserves a diagnostic log at `%LOCALAPPDATA%\\ratriyx\\state\\setup-tor-stderr.log` rather than hiding the original failure. A Tor SOCKS5 listener is not proof of anonymity; final route verification requires `IsTor=true`.
 
 ## What it does
 
