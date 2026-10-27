@@ -256,6 +256,19 @@ fn setup_install_managed_windows(
                 )));
             }
             let torrc_arg = torrc.to_string_lossy().to_string();
+            eprintln!("  Validating Tor configuration...");
+            let check = std::process::Command::new(&exe)
+                .args(["-f", torrc_arg.as_str(), "--verify-config"])
+                .output()
+                .map_err(|err| Error::Io(format!("cannot validate Tor config: {err}")))?;
+            if !check.status.success() {
+                return Err(Error::Verification(format!(
+                    "Tor rejected its configuration ({}): {} {}",
+                    check.status,
+                    String::from_utf8_lossy(&check.stdout).trim(),
+                    String::from_utf8_lossy(&check.stderr).trim()
+                )));
+            }
             stage!("Starting Tor on SOCKS5 port 9050...");
             let mut child = wm::spawn_tracked_logged(
                 &exe,
