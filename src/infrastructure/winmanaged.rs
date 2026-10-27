@@ -33,9 +33,24 @@ pub fn torrc_text(data_dir: &Path, socks_port: u16, control_port: u16) -> String
          CookieAuthentication 1\n\
          DataDirectory \"{}\"\n\
          Log notice file \"{}\"\n",
-        data_dir.display(),
-        data_dir.join("tor.log").display(),
+        torrc_path(data_dir),
+        torrc_path(&data_dir.join("tor.log")),
     )
+}
+
+/// Tor parses quoted paths with C-style escapes. Native Windows
+/// backslashes such as \\U are not valid torrc escapes, so convert separators
+/// to forward slashes on Windows. Keep POSIX paths unchanged.
+fn torrc_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        path.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        path.into_owned()
+    }
 }
 
 /// Minimal Ratriyx-owned Privoxy config: loopback listen, one forwarding rule.
@@ -367,13 +382,28 @@ pub fn stop_tracked(pid_file: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
-    fn torrc_is_loopback_cookie_auth_and_quotes_spaced_paths() {
+    fn torrc_windows_paths_use_forward_slashes_and_quote_spaces() {
         let text = torrc_text(Path::new("C:\\My Dir\\Tor Data"), 9050, 9051);
         assert!(text.contains("SocksPort 127.0.0.1:9050"));
         assert!(text.contains("ControlPort 127.0.0.1:9051"));
         assert!(text.contains("CookieAuthentication 1"));
-        assert!(text.contains("DataDirectory \"C:\\My Dir\\Tor Data\""));
+        assert!(text.contains(r#"DataDirectory "C:/My Dir/Tor Data""#));
+        assert!(text.contains(r#"Log notice file "C:/My Dir/Tor Data/tor.log""#));
+        assert!(!text.contains("C:\\My Dir"));
+        assert!(!text.contains("Password") && !text.contains("HashedControlPassword"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn torrc_unix_paths_preserve_slashes_and_quote_spaces() {
+        let text = torrc_text(Path::new("/home/user/space dir/data"), 9050, 9051);
+        assert!(text.contains("SocksPort 127.0.0.1:9050"));
+        assert!(text.contains("ControlPort 127.0.0.1:9051"));
+        assert!(text.contains("CookieAuthentication 1"));
+        assert!(text.contains(r#"DataDirectory "/home/user/space dir/data""#));
+        assert!(text.contains(r#"Log notice file "/home/user/space dir/data/tor.log""#));
         assert!(!text.contains("Password") && !text.contains("HashedControlPassword"));
     }
 
