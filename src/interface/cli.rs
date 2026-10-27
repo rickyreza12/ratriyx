@@ -18,7 +18,8 @@ USAGE:
   ratriyx configure [--dry-run] [--yes] [--restart] [--file PATH]
   ratriyx service start|stop|restart|status [tor|privoxy] [--yes]
   ratriyx restore [--file PATH] [--yes]
-  ratriyx uninstall [--yes] [--remove-managed]
+  ratriyx uninstall [--yes] [--remove-tor] [--remove-privoxy]
+  ratriyx uninstall --remove-managed [--yes]
   ratriyx rotate [--yes]
   ratriyx config migrate [--yes]
   ratriyx --help | --version
@@ -89,6 +90,8 @@ pub enum Command {
     Uninstall {
         yes: bool,
         remove_managed: bool,
+        remove_tor: bool,
+        remove_privoxy: bool,
     },
     Rotate {
         yes: bool,
@@ -316,17 +319,27 @@ pub fn parse(args: &[String]) -> Result<Command> {
             Ok(Command::Restore { yes, file })
         }
         "uninstall" => {
-            let (mut yes, mut remove_managed) = (false, false);
+            let (mut yes, mut remove_managed, mut remove_tor, mut remove_privoxy) =
+                (false, false, false, false);
             while let Some(arg) = s.take() {
                 match arg {
                     "--yes" => yes = true,
                     "--remove-managed" => remove_managed = true,
+                    "--remove-tor" => remove_tor = true,
+                    "--remove-privoxy" => remove_privoxy = true,
                     other => return Err(unknown("uninstall", other)),
                 }
+            }
+            if remove_managed && (remove_tor || remove_privoxy) {
+                return Err(Error::Usage(
+                    "--remove-managed cannot be combined with dependency uninstall flags".into(),
+                ));
             }
             Ok(Command::Uninstall {
                 yes,
                 remove_managed,
+                remove_tor,
+                remove_privoxy,
             })
         }
         "rotate" => Ok(Command::Rotate {
@@ -407,6 +420,29 @@ mod tests {
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn uninstall_dependencies_require_separate_flags() {
+        assert_eq!(
+            parse(&argv(&["uninstall", "--yes", "--remove-tor", "--remove-privoxy"])).unwrap(),
+            Command::Uninstall {
+                yes: true,
+                remove_managed: false,
+                remove_tor: true,
+                remove_privoxy: true,
+            }
+        );
+        assert_eq!(
+            parse(&argv(&["uninstall"])).unwrap(),
+            Command::Uninstall {
+                yes: false,
+                remove_managed: false,
+                remove_tor: false,
+                remove_privoxy: false,
+            }
+        );
+        assert!(parse(&argv(&["uninstall", "--remove-managed", "--remove-tor"])).is_err());
     }
 
     #[test]
