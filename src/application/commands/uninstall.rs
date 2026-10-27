@@ -19,7 +19,7 @@ struct Choices {
 }
 
 fn owns(rec: &managed::Record, name: &str, source: &str) -> bool {
-    rec.platform == "windows"
+    (rec.platform.is_empty() || rec.platform == "windows")
         && rec
             .dependencies
             .iter()
