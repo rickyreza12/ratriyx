@@ -2,16 +2,14 @@
 //! merely because Ratriyx itself is being uninstalled.
 use super::maintenance;
 use crate::domain::error::{Error, Result};
-use crate::infrastructure::config;
 use crate::infrastructure::fsutil::io_err;
 use crate::infrastructure::{managed, shell};
 #[cfg(windows)]
 use crate::infrastructure::{hash::sha256_hex, winmanaged as wm};
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::Path;
 #[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Choices {
