@@ -10,6 +10,8 @@ pub fn doctor(cfg: &Config, json: bool, mode: Mode, app: Option<&str>) -> Result
     let checks = diagnostics::run_doctor(cfg, mode, app);
     let out = if json {
         format!("{}\n", diagnostics::render_json(&checks))
+    } else if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        crate::interface::terminal::doctor(&checks)
     } else {
         diagnostics::render_text(&checks)
     };
