@@ -196,7 +196,10 @@ fn wait_for_socks_monitor(
             }
         }
         if crate::infrastructure::network::socks5_greeting(addr).is_ok() {
-            eprintln!("  [OK] SOCKS5 listener {addr} ready after {}s", start.elapsed().as_secs());
+            eprintln!(
+                "  [OK] SOCKS5 listener {addr} ready after {}s",
+                start.elapsed().as_secs()
+            );
             return Ok(());
         }
         let elapsed = start.elapsed().as_secs();
@@ -213,7 +216,11 @@ Tor stderr: {stderr}; Tor notices: {notices}; startup log: {}",
             eprintln!("  Waiting for Tor SOCKS5... {elapsed}/{deadline_secs}s");
             if let Some(log) = tor_log {
                 if let Ok(contents) = fs::read_to_string(log) {
-                    if let Some(line) = contents.lines().rev().find(|line| line.contains("Bootstrapped ")) {
+                    if let Some(line) = contents
+                        .lines()
+                        .rev()
+                        .find(|line| line.contains("Bootstrapped "))
+                    {
                         if line != last_bootstrap {
                             eprintln!("  Tor: {}", line.trim());
                             last_bootstrap = line.to_string();
@@ -420,10 +427,7 @@ mod tests {
 
     #[test]
     fn exited_child_is_reported_without_waiting_for_timeout() {
-        let dir = std::env::temp_dir().join(format!(
-            "ratriyx-early-exit-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ratriyx-early-exit-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let pid = dir.join("child.pid");
