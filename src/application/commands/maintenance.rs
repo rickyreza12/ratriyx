@@ -205,6 +205,12 @@ fn setup_install_managed_windows(
             let _ = wm::stop_tracked(pid);
         }
         eprintln!("  [ROLLBACK] Stopping only processes started by this setup");
+        if tor_notices.is_file() {
+            let retained = dir.join("setup-tor-notices.log");
+            if fs::copy(&tor_notices, &retained).is_ok() {
+                eprintln!("  Tor notices preserved: {}", retained.display());
+            }
+        }
         if !tor_dir_preexisting {
             let _ = fs::remove_dir_all(&tor_dir);
         }
