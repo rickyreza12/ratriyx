@@ -15,6 +15,8 @@ pub(crate) mod strict_guard;
 pub(crate) mod tor_control;
 // Windows-targeted; exercised cross-platform by its tests.
 #[cfg(windows)]
+pub(crate) mod job_windows;
+#[cfg(windows)]
 pub(crate) mod wfp_windows;
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) mod winmanaged;

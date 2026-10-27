@@ -8,6 +8,7 @@ pub fn check() -> Result<i32> {
     #[cfg(windows)]
     {
         say!("{}", crate::infrastructure::wfp_windows::preflight()?);
+        say!("{}", crate::infrastructure::job_windows::preflight()?);
         say!("strict policy: NOT ACTIVE; application launch remains blocked");
         say!("missing: isolated process-tree identity, IPv4/IPv6+DNS rules, live leak tests");
         Ok(0)

@@ -101,6 +101,24 @@ already-established connections and the OS firewall's own arbitration further
 require validation. No code path currently installs these filters, and the
 strict runner still fails closed.
 
+A Windows Job Object preflight also creates an **empty, temporary kernel job**
+with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and immediately destroys it. No child
+is assigned and no application is killed. This proves the OS supports the
+lifecycle primitive, **not** that an OpenCode process tree is contained.
+
+The eventual strict launcher must create the child in a suspended state,
+assign it to a no-breakaway job before resuming it, and ensure every helper
+remains inside that job. Job membership does not itself identify traffic
+for ALE_APP_ID WFP filters.
+
+**Critical crash invariant:** a dynamic WFP session removes its block filters
+if Ratriyx crashes. If protected children survive, they can start connecting
+directly once the policy disappears. The child job therefore must be coupled
+to an always-alive enforcement supervisor (or a persistent fail-safe service)
+and child termination must be proven before any rule teardown. Closing a
+kill-on-close job handle is a useful safety mechanism but **by itself does not
+prove that no timing gap exists** between WFP filter removal and process death.
+
 **Next gate:** isolated process-tree identity, suspended/atomic launch,
 privilege model, verified enforcement of direct TCP, UDP/QUIC, local DNS,
 IPv6 and child processes. Only test filter installation on an isolated

@@ -40,6 +40,8 @@ per-process proxy variables. Existing `run --mode tor` continues unchanged.
 Windows now provides a read-only `ratriyx strict check` command that opens
 and closes a dynamic WFP session without adding any filters. An internal
 non-production WFP filter builder remains disconnected from all CLI launches.
+Windows also probes an empty kill-on-close Job Object without launching or
+terminating any application. The eventual guard must couple both lifecycles.
 
 See [docs/strict-routing-v0.4.md](docs/strict-routing-v0.4.md) for
 the Windows WFP, Linux namespace and macOS enforcement requirements, and the
