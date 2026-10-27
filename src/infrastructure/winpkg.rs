@@ -86,23 +86,31 @@ pub fn execute(action: &Action, dest_dir: &Path) -> Result<FetchResult> {
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .map_err(|e| Error::Io(format!("cannot run WinGet (is it installed?): {e}")))?;
-            let stdout = child.stdout.take().ok_or_else(|| {
-                Error::Io("cannot capture WinGet stdout".into())
-            })?;
-            let stderr = child.stderr.take().ok_or_else(|| {
-                Error::Io("cannot capture WinGet stderr".into())
-            })?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| Error::Io("cannot capture WinGet stdout".into()))?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| Error::Io("cannot capture WinGet stderr".into()))?;
             // Tee both pipes concurrently; WinGet output remains visible.
             let out_thread = std::thread::spawn(move || tee_output(stdout, false));
             let err_thread = std::thread::spawn(move || tee_output(stderr, true));
             let status = child.wait().map_err(io_err)?;
-            let out = out_thread.join().map_err(|_| Error::Io("WinGet stdout reader panicked".into()))?
+            let out = out_thread
+                .join()
+                .map_err(|_| Error::Io("WinGet stdout reader panicked".into()))?
                 .map_err(io_err)?;
-            let err = err_thread.join().map_err(|_| Error::Io("WinGet stderr reader panicked".into()))?
+            let err = err_thread
+                .join()
+                .map_err(|_| Error::Io("WinGet stderr reader panicked".into()))?
                 .map_err(io_err)?;
             if status.success() {
                 eprintln!("  [OK] WinGet finished installing {package}");
-                return Ok(FetchResult { path: PathBuf::from(package) });
+                return Ok(FetchResult {
+                    path: PathBuf::from(package),
+                });
             }
             Err(classify_failure(
                 package,
