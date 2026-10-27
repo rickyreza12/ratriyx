@@ -1,6 +1,7 @@
 mod diagnose;
 mod launch;
 mod maintenance;
+mod onboarding;
 mod proxy;
 
 use crate::domain::error::Result;
@@ -10,6 +11,10 @@ use crate::interface::cli::Command;
 use crate::interface::setup;
 use std::env;
 use std::ffi::OsString;
+
+pub fn first_run() -> Result<i32> {
+    onboarding::run(&load_config()?)
+}
 
 pub fn dispatch(command: Command) -> Result<i32> {
     let cfg = load_config()?;
