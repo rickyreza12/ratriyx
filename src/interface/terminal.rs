@@ -18,6 +18,7 @@ fn accent(text: &str, code: &str, enabled: bool) -> String {
     }
 }
 
+#[cfg(windows)]
 pub fn install_header() {
     let color = color_enabled();
     eprintln!();
@@ -38,6 +39,7 @@ pub fn install_header() {
 }
 
 /// Completion-oriented overall progress, not a fabricated download percentage.
+#[cfg(windows)]
 pub fn install_stage(index: usize, total: usize, description: &str) {
     let color = color_enabled();
     let width = 20usize;
@@ -51,6 +53,7 @@ pub fn install_stage(index: usize, total: usize, description: &str) {
     );
 }
 
+#[cfg(windows)]
 pub fn install_done(description: &str) {
     eprintln!(
         "       {} {description}",
@@ -65,6 +68,7 @@ pub fn install_activity(label: &str, elapsed_secs: u64) {
     );
 }
 
+#[cfg(windows)]
 pub fn install_success(total: usize) {
     eprintln!(
         "  {} {}",
