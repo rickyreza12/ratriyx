@@ -251,10 +251,11 @@ fn setup_install_managed_windows(
                 &base,
             )?;
             let path_var = env::var_os("PATH").unwrap_or_default();
-            let exe = crate::infrastructure::opencode::find_on_path("privoxy", &path_var)
-                .ok_or_else(|| {
-                    Error::Verification("Privoxy installed but privoxy.exe is not on PATH".into())
-                })?;
+            let exe = wm::find_privoxy_exe(&path_var).ok_or_else(|| {
+                Error::Verification(
+                    "Privoxy was installed but privoxy.exe could not be located; check the WinGet installation path before proceeding".into(),
+                )
+            })?;
             fs::write(&conf, wm::privoxy_conf_text(8118, "127.0.0.1:9050"))
                 .map_err(fsutil::io_err)?;
             let conf_arg = conf.to_string_lossy().to_string();
