@@ -6,10 +6,9 @@ Ratriyx (command: `ratriyx`) does not implement Tor or Privoxy. It checks them, 
 
 ## Installation and first run
 
-The released v0.1.0 installs with `cargo install ratriyx`. The interactive
-first-run wizard described below is in **v0.2.0 (unreleased)**.
+The published version is v0.2.0. The upcoming v0.3.0 development branch adds a Ratatui installer and safer recovery from partial installs.
 
-After v0.2.0 is published, the user experience will be:
+The normal CLI experience is:
 
 ```powershell
 cargo install ratriyx
@@ -25,6 +24,12 @@ skip marker; `ratriyx setup --install` remains available later. Calls from
 scripts, CI, and `ratriyx --help` never initiate installation. Windows uses
 a pinned Tor bundle and WinGet Privoxy; Linux/macOS still require system
 packages installed separately. A real Windows managed installation successfully reached `IsTor=true` on October 27, 2026; individual Windows environments must still be checked. Setup now displays a six-stage progress bar, Tor download percentage, and WinGet elapsed-time indicators for Privoxy. If Tor exits or times out, the installer preserves a diagnostic log at `%LOCALAPPDATA%\\ratriyx\\state\\setup-tor-stderr.log` rather than hiding the original failure. A Tor SOCKS5 listener is not proof of anonymity; final route verification requires `IsTor=true`.
+
+## Upcoming v0.3.0 Windows terminal installer
+
+The Windows managed installer now uses Ratatui when launched from an interactive terminal. It shows a complete setup pipeline, verified-stage progress bars for Tor, Privoxy and route checks, and a live operation indicator. Curl exposes actual Tor download percentages. WinGet does not provide a reliable percentage for Privoxy installation, so Ratatui shows elapsed-time activity and live installer messages instead of an invented percentage. Existing Privoxy installations, including unknown-version WinGet registrations, are reused rather than upgraded automatically.
+
+For command scripts, redirected output, or legacy terminals, the installer keeps a normal text-only fallback. Set RATRIYX_NO_TUI=1 to disable Ratatui explicitly, or NO_COLOR=1 to disable colors and fullscreen UI. No install or package upgrade happens without the normal approval flag.
 
 ## What it does
 
@@ -81,7 +86,7 @@ See [installation.md](installation.md) for the full setup and [troubleshooting.m
 
 ## Status
 
-Version 0.1.0 is a first build. It builds and passes formatting, clippy with warnings denied, and the test suite in Ubuntu under WSL2. Live checks that were run, and the ones not run, are recorded in `../workspaces/doc/tasks.md`.
+Version 0.2.0 is the published release. Version 0.3.0 is under development. It builds and passes formatting, clippy with warnings denied, and the test suite in Ubuntu under WSL2. Live checks that were run, and the ones not run, are recorded in `../workspaces/doc/tasks.md`.
 
 ## License
 

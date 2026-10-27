@@ -112,10 +112,7 @@ pub fn help_lists_standalone(text: &str) -> bool {
     text.lines().any(|line| {
         let trimmed = line.trim_start();
         trimmed.starts_with("--standalone")
-            && trimmed[12..]
-                .chars()
-                .next()
-                .map_or(true, char::is_whitespace)
+            && trimmed[12..].chars().next().is_none_or(char::is_whitespace)
     })
 }
 

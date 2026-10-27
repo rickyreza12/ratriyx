@@ -20,6 +20,9 @@ fn accent(text: &str, code: &str, enabled: bool) -> String {
 
 #[cfg(windows)]
 pub fn install_header() {
+    if crate::interface::installer::active() {
+        return;
+    }
     let color = color_enabled();
     eprintln!();
     eprintln!(
@@ -41,6 +44,9 @@ pub fn install_header() {
 /// Completion-oriented overall progress, not a fabricated download percentage.
 #[cfg(windows)]
 pub fn install_stage(index: usize, total: usize, description: &str) {
+    if crate::interface::installer::stage(index, total, description) {
+        return;
+    }
     let color = color_enabled();
     let width = 20usize;
     let done = (index.saturating_sub(1) * width) / total.max(1);
@@ -55,6 +61,9 @@ pub fn install_stage(index: usize, total: usize, description: &str) {
 
 #[cfg(windows)]
 pub fn install_done(description: &str) {
+    if crate::interface::installer::done(description) {
+        return;
+    }
     eprintln!(
         "       {} {description}",
         accent("OK", "1;32", color_enabled())
@@ -62,6 +71,10 @@ pub fn install_done(description: &str) {
 }
 
 pub fn install_activity(label: &str, elapsed_secs: u64) {
+    #[cfg(windows)]
+    if crate::interface::installer::activity(label, elapsed_secs) {
+        return;
+    }
     eprintln!(
         "       {} {label} ({elapsed_secs}s elapsed)",
         accent("..", "33", color_enabled())
@@ -70,6 +83,9 @@ pub fn install_activity(label: &str, elapsed_secs: u64) {
 
 #[cfg(windows)]
 pub fn install_success(total: usize) {
+    if crate::interface::installer::done("All stages completed; IsTor=true") {
+        return;
+    }
     eprintln!(
         "  {} {}",
         accent(&format!("[{}] ", "#".repeat(20)), "1;32", color_enabled()),
@@ -80,6 +96,47 @@ pub fn install_success(total: usize) {
         )
     );
     eprintln!();
+}
+
+/// Captures setup logs in Ratatui, leaving structured non-TTY output intact.
+pub fn install_log(message: &str) {
+    #[cfg(windows)]
+    if crate::interface::installer::log(message) {
+        return;
+    }
+    eprintln!("  {message}");
+}
+
+/// True if a fullscreen dashboard has taken ownership of console output.
+pub fn install_tui_active() -> bool {
+    #[cfg(windows)]
+    {
+        crate::interface::installer::active()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Stream child output into the UI while keeping the fallback CLI unchanged.
+pub fn install_stream(bytes: &[u8]) -> bool {
+    #[cfg(windows)]
+    if install_tui_active() {
+        crate::interface::installer::ingest_output(bytes);
+        return true;
+    }
+    let _ = bytes;
+    false
+}
+
+/// Extract actual Curl progress percentages from a buffered progress meter.
+pub fn install_curl_progress(bytes: &[u8]) {
+    #[cfg(windows)]
+    if install_tui_active() {
+        crate::interface::installer::ingest_curl(bytes);
+    }
+    let _ = bytes;
 }
 
 fn heading(out: &mut String, label: &str, colorful: bool) {

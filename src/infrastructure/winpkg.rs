@@ -71,7 +71,9 @@ fn winget_program() -> &'static str {
 pub fn execute(action: &Action, dest_dir: &Path) -> Result<FetchResult> {
     match action {
         Action::WingetInstall { package } => {
-            eprintln!("  WinGet: installing {package} (streaming output)...");
+            crate::interface::terminal::install_log(&format!(
+                "WinGet: installing missing {package} (streaming output)"
+            ));
             let mut child = Command::new(winget_program())
                 .args([
                     "install",
@@ -126,7 +128,9 @@ pub fn execute(action: &Action, dest_dir: &Path) -> Result<FetchResult> {
                 .map_err(|_| Error::Io("WinGet stderr reader panicked".into()))?
                 .map_err(io_err)?;
             if status.success() {
-                eprintln!("  [OK] WinGet finished installing {package}");
+                crate::interface::terminal::install_log(&format!(
+                    "WinGet finished installing {package}"
+                ));
                 return Ok(FetchResult {
                     path: PathBuf::from(package),
                 });
@@ -151,12 +155,14 @@ fn tee_output<R: std::io::Read>(mut reader: R, stderr: bool) -> std::io::Result<
         if n == 0 {
             break;
         }
-        if stderr {
-            std::io::stderr().write_all(&chunk[..n])?;
-            std::io::stderr().flush()?;
-        } else {
-            std::io::stdout().write_all(&chunk[..n])?;
-            std::io::stdout().flush()?;
+        if !crate::interface::terminal::install_stream(&chunk[..n]) {
+            if stderr {
+                std::io::stderr().write_all(&chunk[..n])?;
+                std::io::stderr().flush()?;
+            } else {
+                std::io::stdout().write_all(&chunk[..n])?;
+                std::io::stdout().flush()?;
+            }
         }
         retained.extend_from_slice(&chunk[..n]);
         if retained.len() > 16_384 {
@@ -200,12 +206,45 @@ fn fetch_verified(url: &str, sha256: &str, dest_dir: &Path) -> Result<FetchResul
     fs::create_dir_all(dest_dir).map_err(io_err)?;
     let name = url.rsplit('/').next().unwrap_or("download").to_string();
     let dest = dest_dir.join(&name);
-    let status = Command::new(curl_program())
+    let mut command = Command::new(curl_program());
+    command
         .args(["-q", "-fL", "--progress-bar", "--show-error", "-o"])
         .arg(&dest)
-        .arg(url)
-        .status()
-        .map_err(|e| Error::Io(format!("cannot run curl: {e}")))?;
+        .arg(url);
+    let status = if crate::interface::terminal::install_tui_active() {
+        use std::io::Read as _;
+        let mut child = command
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| Error::Io(format!("cannot start curl: {e}")))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::Io("cannot read curl progress".into()))?;
+        let mut buffer = [0u8; 1024];
+        let mut recent = Vec::new();
+        loop {
+            let n = stderr.read(&mut buffer).map_err(io_err)?;
+            if n == 0 {
+                break;
+            }
+            recent.extend_from_slice(&buffer[..n]);
+            if recent.len() > 256 {
+                recent.drain(..recent.len() - 256);
+            }
+            crate::interface::terminal::install_curl_progress(&recent);
+            // Keep the actual curl errors visible within the dashboard.
+            if buffer[..n].contains(&b'\n') {
+                crate::interface::terminal::install_stream(&buffer[..n]);
+            }
+        }
+        child.wait().map_err(io_err)?
+    } else {
+        command
+            .status()
+            .map_err(|e| Error::Io(format!("cannot run curl: {e}")))?
+    };
     if !status.success() {
         return Err(Error::Io(format!("download failed: {url}")));
     }

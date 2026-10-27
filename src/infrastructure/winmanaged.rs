@@ -119,6 +119,33 @@ pub fn managed_base() -> Option<PathBuf> {
     }
 }
 
+/// WinGet may register an installed package with an Unknown version even
+/// when it is absent from PATH. Never attempt a blind install/upgrade.
+#[cfg(windows)]
+pub fn winget_has_package(package: &str) -> bool {
+    let output = Command::new("winget.exe")
+        .args([
+            "list",
+            "--exact",
+            "--id",
+            package,
+            "--accept-source-agreements",
+            "--disable-interactivity",
+        ])
+        .output();
+    match output {
+        Ok(result) => installed_package_row(&String::from_utf8_lossy(&result.stdout), package),
+        Err(_) => false,
+    }
+}
+
+#[cfg(any(test, windows))]
+fn installed_package_row(output: &str, package: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.split_whitespace().any(|column| column == package))
+}
+
 fn tar_program() -> &'static str {
     if cfg!(windows) {
         "tar.exe"
@@ -213,10 +240,10 @@ fn wait_for_socks_monitor(
             }
         }
         if crate::infrastructure::network::socks5_greeting(addr).is_ok() {
-            eprintln!(
-                "  [OK] SOCKS5 listener {addr} ready after {}s",
+            crate::interface::terminal::install_log(&format!(
+                "SOCKS5 listener {addr} ready after {}s",
                 start.elapsed().as_secs()
-            );
+            ));
             return Ok(());
         }
         let elapsed = start.elapsed().as_secs();
@@ -230,7 +257,10 @@ Tor stderr: {stderr}; Tor notices: {notices}; startup log: {}",
             )));
         }
         if elapsed >= next_report {
-            eprintln!("  Waiting for Tor SOCKS5... {elapsed}/{deadline_secs}s");
+            crate::interface::terminal::install_activity(
+                &format!("Waiting for Tor SOCKS5 ({elapsed}/{deadline_secs}s)"),
+                elapsed,
+            );
             if let Some(log) = tor_log {
                 if let Ok(contents) = fs::read_to_string(log) {
                     if let Some(line) = contents
@@ -239,7 +269,10 @@ Tor stderr: {stderr}; Tor notices: {notices}; startup log: {}",
                         .find(|line| line.contains("Bootstrapped "))
                     {
                         if line != last_bootstrap {
-                            eprintln!("  Tor: {}", line.trim());
+                            crate::interface::terminal::install_log(&format!(
+                                "Tor: {}",
+                                line.trim()
+                            ));
                             last_bootstrap = line.to_string();
                         }
                     }
@@ -589,6 +622,14 @@ mod tests {
         assert!(stop_tracked_verified(&pid, &fake_exe, Path::new("C:\\fake.cfg")).is_err());
         assert!(pid.is_file());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn winget_detects_unknown_installed_version_without_upgrade() {
+        let example = "Name                  Id              Version Available Source\n\
+Privoxy (remove only) Privoxy.Privoxy Unknown 4.1.0     winget";
+        assert!(installed_package_row(example, "Privoxy.Privoxy"));
+        assert!(!installed_package_row(example, "Other.Package"));
     }
 
     #[test]

@@ -44,8 +44,29 @@ pub fn gather(path_var: &OsStr, cfg: &crate::infrastructure::config::Config) -> 
         platform: platform.describe(),
         support: platform.support_level().to_string(),
         systemd,
-        tor_installed: find_on_path("tor", path_var).is_some(),
-        privoxy_installed: find_on_path("privoxy", path_var).is_some(),
+        tor_installed: find_on_path("tor", path_var).is_some() || {
+            #[cfg(windows)]
+            {
+                crate::infrastructure::winmanaged::managed_base().is_some_and(|base| {
+                    base.join("tor").join("Tor").join("tor.exe").is_file()
+                        && base.join("tor").join("torrc").is_file()
+                })
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        },
+        privoxy_installed: find_on_path("privoxy", path_var).is_some() || {
+            #[cfg(windows)]
+            {
+                crate::infrastructure::winmanaged::find_privoxy_exe(path_var).is_some()
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        },
         curl_installed: find_on_path(platform::curl_program(), path_var).is_some(),
         package_manager: detect_package_manager(path_var),
         forwarding,

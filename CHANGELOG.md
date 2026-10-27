@@ -2,6 +2,18 @@
 
 All notable changes to Ratriyx are recorded here.
 
+## 0.3.0 (unreleased)
+
+### Windows managed setup and terminal UX
+
+- Added a Ratatui interactive Windows installer with total-stage and separate Tor, Privoxy and routing progress bars, streamed WinGet output, real Tor transfer percentage and indeterminate activity feedback for operations without percentage APIs.
+- Reuses already-installed Privoxy even if it is not on PATH and WinGet reports an Unknown version. Never forces an unrequested upgrade.
+- Reuses intact Ratriyx-managed Tor binaries and its configuration across reinstall attempts; refuses incomplete or unowned directories.
+- Continues to fail closed when ports are occupied or a configuration is unexpectedly edited. Only newly installed dependencies are recorded as owned.
+- Improved Windows setup discovery, human-readable recovery hints and terminal experience; plain, redirected and machine-readable output remain supported.
+- Increased minimum Rust version to 1.88 due to Ratatui dependency requirements. Ratatui UI can be disabled with RATRIYX_NO_TUI or NO_COLOR.
+
+
 ## 0.2.0 (unreleased)
 
 ### First-run onboarding (new)
