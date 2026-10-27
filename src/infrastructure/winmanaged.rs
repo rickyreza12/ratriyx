@@ -346,7 +346,10 @@ pub fn stop_tracked_verified(pid_file: &Path, expected_exe: &Path) -> Result<Str
         ))
     })?;
     let expected_path = fs::canonicalize(expected_exe).map_err(io_err)?;
-    if !actual_path.to_string_lossy().eq_ignore_ascii_case(&expected_path.to_string_lossy()) {
+    if !actual_path
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&expected_path.to_string_lossy())
+    {
         return Err(Error::Verification(format!(
             "PID {pid} does not belong to the expected Ratriyx-managed executable; refusing to stop it"
         )));
@@ -560,15 +563,16 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn verified_stop_refuses_to_kill_an_unrelated_process() {
-        let dir = std::env::temp_dir().join(format!(
-            "ratriyx-pid-identity-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ratriyx-pid-identity-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let pid = dir.join("unrelated.pid");
         fs::write(&pid, std::process::id().to_string()).unwrap();
-        let fake_exe = std::env::current_exe().unwrap().parent().unwrap().join("not-tor.exe");
+        let fake_exe = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("not-tor.exe");
         assert!(stop_tracked_verified(&pid, &fake_exe).is_err());
         assert!(pid.is_file());
         let _ = fs::remove_dir_all(&dir);
