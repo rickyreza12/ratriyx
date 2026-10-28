@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "ratriyx"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ratatui",
  "windows-sys 0.61.2",

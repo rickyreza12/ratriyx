@@ -40,7 +40,7 @@ fn documents_dir() -> Result<PathBuf> {
 
 #[cfg(not(windows))]
 fn documents_dir() -> Result<PathBuf> {
-    Ok(old_documents_dir()?)
+    old_documents_dir()
 }
 
 fn old_documents_dir() -> Result<PathBuf> {

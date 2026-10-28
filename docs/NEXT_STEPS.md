@@ -1,6 +1,7 @@
 # Ratriyx: what comes next
 
-**Baseline:** v0.4.0, published October 28, 2026.
+**Baseline:** v0.4.1 documentation release, published October 28, 2026.
+The functional baseline remains v0.4.0.
 This is a prioritized engineering roadmap, **not a claim that the listed
 features already work**. Work should move to the next milestone only after
 its acceptance checks are demonstrated. No release dates are promised.

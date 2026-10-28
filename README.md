@@ -10,8 +10,9 @@ Ratriyx runs on Windows, Linux and macOS. It uses the **C Tor client** and an
 Privoxy remains available as a legacy option and is still used by parts of the
 managed setup and diagnostic workflow. No Docker or container runtime is needed.
 
-**Current release:** [v0.4.0](https://crates.io/crates/ratriyx/0.4.0)
-(October 28, 2026).
+**Current release:** [v0.4.1](https://crates.io/crates/ratriyx/0.4.1)
+(October 28, 2026). This patch release refreshes the crate's README and
+roadmap; the CLI features remain those introduced in v0.4.0.
 
 > **Security boundary:** A successful `IsTor=true` check verifies the specific
 > test request. Ratriyx cannot yet guarantee that every connection from an

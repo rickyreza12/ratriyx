@@ -2,6 +2,13 @@
 
 All notable changes to Ratriyx are recorded here.
 
+## 0.4.1 (2026-10-28)
+
+- Documentation and CI maintenance release to refresh the README displayed on crates.io.
+- Added a prioritized `docs/NEXT_STEPS.md` roadmap and aligned v0.4 docs with the published implementation and security limitations.
+- Fixed `clippy::needless_question_mark` in the non-Windows PowerShell profile path, flagged by Linux CI with `-D warnings`.
+- No change to the v0.4.0 command behavior.
+
 ## 0.4.0 (2026-10-28)
 
 - Fixed Windows PowerShell 5.1/7 profile discovery on redirected Documents folders (including OneDrive) using the Windows Known Folder API. Enabling the profile now migrates and backs up the previous Ratriyx-managed block from the legacy USERPROFILE path without overwriting unrelated user settings.
