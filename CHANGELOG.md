@@ -6,7 +6,7 @@ All notable changes to Ratriyx are recorded here.
 
 - Documentation and CI maintenance release to refresh the README displayed on crates.io.
 - Added a prioritized `docs/NEXT_STEPS.md` roadmap and aligned v0.4 docs with the published implementation and security limitations.
-- Fixed `clippy::needless_question_mark` in the non-Windows PowerShell profile path, flagged by Linux CI with `-D warnings`.
+- Fixed `clippy::needless_question_mark` (Linux) and `clippy::chunks_exact_to_as_chunks` (Windows) reported by Rust 1.99 CI with `-D warnings`.
 - No change to the v0.4.0 command behavior.
 
 ## 0.4.0 (2026-10-28)

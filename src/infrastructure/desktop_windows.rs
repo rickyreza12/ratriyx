@@ -149,8 +149,11 @@ fn from_hex(s: &str) -> Result<Vec<u8>> {
     if !s.len().is_multiple_of(2) || s.len() > 131072 {
         return Err(Error::Config("invalid WinINet backup hex length".into()));
     }
+    // Even length is validated above; the remainder from as_chunks is empty.
     s.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let pair = std::str::from_utf8(pair)
                 .map_err(|_| Error::Config("invalid backup encoding".into()))?;
