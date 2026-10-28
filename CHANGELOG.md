@@ -2,7 +2,22 @@
 
 All notable changes to Ratriyx are recorded here.
 
-## 0.3.0 (unreleased)
+## 0.4.0 (2026-10-28)
+
+- Fixed Windows PowerShell 5.1/7 profile discovery on redirected Documents folders (including OneDrive) using the Windows Known Folder API. Enabling the profile now migrates and backs up the previous Ratriyx-managed block from the legacy USERPROFILE path without overwriting unrelated user settings.
+- PowerShell profiles now retain the configured proxy variables when the proxy is temporarily unavailable and warn clearly instead of silently sending proxy-aware traffic directly.
+- Added local privacy assessment that refuses to claim anonymity or hide application identity leakage.
+- Added opt-in desktop HTTP proxy server with explicit, restorable Windows current-user, PowerShell profile and Zed integrations (development).
+- Added read-only Tor circuit cooldown status and verified post-rotation checks through the embedded proxy, while preserving provider quota boundaries.
+
+## 0.3.0 (2026-10-28)
+
+### Embedded proxy (experimental)
+
+- `run --mode tor` and `ip` use a temporary, loopback-only embedded Rust HTTP-to-SOCKS5 proxy by default, forwarding target names through Tor's SOCKS5 endpoint for remote DNS.
+- `--privoxy` explicitly retains the legacy frontend for `run` and `ip`. Existing `--embedded-proxy` scripts continue to work.
+- Embedded proxy supports HTTP requests with Content-Length and HTTPS CONNECT, refuses failed Tor connections, and verifies `IsTor=true` before launching a child.
+- `--strict` continues to refuse to launch until OS-backed enforcement exists. Application logins, DNS outside the proxy, and applications bypassing environment proxy variables remain important limitations.
 
 ### Windows managed setup and terminal UX
 

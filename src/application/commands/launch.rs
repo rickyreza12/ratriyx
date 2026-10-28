@@ -2,6 +2,7 @@ use super::path_var;
 use crate::domain::error::{Error, Result};
 use crate::domain::route::{self, Mode, Verify};
 use crate::infrastructure::config::Config;
+use crate::infrastructure::embedded_proxy::EmbeddedProxy;
 use crate::infrastructure::opencode;
 use crate::infrastructure::runner;
 use crate::infrastructure::shell;
@@ -9,15 +10,26 @@ use crate::infrastructure::strict_guard;
 use crate::interface::cli::ShellKind;
 use crate::interface::diagnostics;
 
-pub fn run(
-    cfg: &Config,
-    mode: Mode,
-    verify: Verify,
-    strict: bool,
-    opencode: bool,
-    program: &str,
-    args: &[String],
-) -> Result<i32> {
+pub struct RunOptions<'a> {
+    pub mode: Mode,
+    pub verify: Verify,
+    pub strict: bool,
+    pub embedded_proxy: bool,
+    pub opencode: bool,
+    pub program: &'a str,
+    pub args: &'a [String],
+}
+
+pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
+    let RunOptions {
+        mode,
+        verify,
+        strict,
+        embedded_proxy,
+        opencode,
+        program,
+        args,
+    } = options;
     // Acquire the enforcement lease BEFORE any child process is launched.
     // Environment proxy variables cannot substitute for OS isolation.
     // Keep the lease alive until the launched application exits.
@@ -26,6 +38,23 @@ pub fn run(
     } else {
         None
     };
+    // Own the proxy for the entire child lifetime. A fresh loopback port keeps
+    // the existing Privoxy setup untouched. Never start a protected child
+    // until this proxy's real Tor route has passed IsTor verification.
+    let mut embedded_cfg = cfg.clone();
+    let _embedded = if embedded_proxy {
+        let socks = cfg
+            .tor_socks_addr()
+            .parse()
+            .map_err(|_| Error::Config("invalid Tor SOCKS5 socket address".into()))?;
+        let server = EmbeddedProxy::start(socks)?;
+        embedded_cfg.proxy_host = server.address().ip().to_string();
+        embedded_cfg.proxy_port = server.address().port();
+        Some(server)
+    } else {
+        None
+    };
+    let cfg = &embedded_cfg;
     let path = path_var();
     let interop = opencode::program_is_interop(program, &path);
     if opencode && args.iter().any(|a| a == "--standalone") {

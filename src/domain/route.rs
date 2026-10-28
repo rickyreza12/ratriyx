@@ -99,7 +99,7 @@ pub fn decide(mode: Mode, verify: Verify, route_verified: bool, interop: bool) -
         (Mode::Tor, _, true, false) => Decision::Launch(Label::Verified),
         (Mode::Tor, Verify::Allow, false, false) => Decision::Launch(Label::Unverified),
         (Mode::Tor, Verify::Require, false, false) => Decision::Refuse(
-            "Tor route not verified (Privoxy or IsTor check failed). Refusing to launch; there is no direct fallback. Run `ratriyx doctor --mode tor`".into(),
+            "Tor route not verified (HTTP proxy or IsTor check failed). Refusing to launch; there is no direct fallback. Run `ratriyx doctor --mode tor`".into(),
         ),
     }
 }

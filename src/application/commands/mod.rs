@@ -1,7 +1,9 @@
+mod desktop;
 mod diagnose;
 mod launch;
 mod maintenance;
 mod onboarding;
+mod privacy;
 mod proxy;
 mod strict;
 mod uninstall;
@@ -22,16 +24,36 @@ pub fn dispatch(command: Command) -> Result<i32> {
     let cfg = load_config()?;
     match command {
         Command::Doctor { json, mode, app } => diagnose::doctor(&cfg, json, mode, app.as_deref()),
-        Command::Ip => diagnose::ip(&cfg),
+        Command::Ip { privoxy } => diagnose::ip(&cfg, privoxy),
         Command::Status => diagnose::status(&cfg),
+        Command::PrivacyCheck { json } => privacy::check(&cfg, json),
+        Command::DesktopServe { port } => desktop::serve(&cfg, port),
+        Command::DesktopChange {
+            target,
+            enable,
+            yes,
+            port,
+        } => desktop::change(&cfg, target, enable, yes, port),
         Command::Run {
             mode,
             verify,
             strict,
+            embedded_proxy,
             opencode,
             program,
             args,
-        } => launch::run(&cfg, mode, verify, strict, opencode, &program, &args),
+        } => launch::run(
+            &cfg,
+            launch::RunOptions {
+                mode,
+                verify,
+                strict,
+                embedded_proxy,
+                opencode,
+                program: &program,
+                args: &args,
+            },
+        ),
         Command::Env {
             shell,
             mode,
@@ -72,6 +94,7 @@ pub fn dispatch(command: Command) -> Result<i32> {
             }
         }
         Command::Rotate { yes } => diagnose::rotate(&cfg, yes),
+        Command::RotateStatus => diagnose::rotate_status(&cfg),
         Command::StrictCheck => strict::check(),
         Command::ConfigMigrate { yes } => maintenance::config_migrate(yes),
         Command::Help | Command::Version => Ok(0),
