@@ -6,6 +6,8 @@ pub(crate) mod desktop_windows;
 pub(crate) mod embedded_proxy;
 pub(crate) mod fsutil;
 pub(crate) mod hash;
+#[cfg(windows)]
+pub(crate) mod isolated_tor;
 pub(crate) mod managed;
 pub(crate) mod network;
 pub(crate) mod opencode;

@@ -10,6 +10,8 @@ USAGE:
   ratriyx gateway check --socks 127.0.0.1:1080 [--different-from IP]
   ratriyx gateway run --socks 127.0.0.1:1080 [--different-from IP] -- <program> [args...]
   ratriyx gateway run --socks 127.0.0.1:1080 [--different-from IP] --opencode [-- args...]
+  ratriyx gateway tor check [--different-from IP]           (Windows, no VPS)
+  ratriyx gateway tor run [--different-from IP] --opencode [-- args...]
   ratriyx status
   ratriyx privacy check [--json]
   ratriyx desktop serve [--port 8119]
@@ -44,6 +46,8 @@ env/on in Tor mode are refused because their shell cannot own a temporary proxy;
 use ratriyx run --mode tor instead.
 Gateway mode requires a separately operated loopback SOCKS5 listener (e.g. SSH -D).
 It refuses unverified or unchanged egress IP; it cannot reset provider quotas.
+Gateway tor starts another temporary local Tor client, verifies its exit differs
+from direct and the existing Tor exit, and stops it on completion.
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +96,15 @@ pub enum Command {
     },
     GatewayRun {
         socks: String,
+        different_from: Option<std::net::IpAddr>,
+        opencode: bool,
+        program: String,
+        args: Vec<String>,
+    },
+    GatewayTorCheck {
+        different_from: Option<std::net::IpAddr>,
+    },
+    GatewayTorRun {
         different_from: Option<std::net::IpAddr>,
         opencode: bool,
         program: String,
@@ -509,6 +522,9 @@ fn parse_gateway(s: &mut Scan) -> Result<Command> {
     let action = s
         .take()
         .ok_or_else(|| Error::Usage("gateway needs check or run".into()))?;
+    if action == "tor" {
+        return parse_gateway_tor(s);
+    }
     if action != "check" && action != "run" {
         return Err(Error::Usage("gateway supports only check or run".into()));
     }
@@ -553,6 +569,52 @@ fn parse_gateway(s: &mut Scan) -> Result<Command> {
     };
     Ok(Command::GatewayRun {
         socks,
+        different_from,
+        opencode,
+        program,
+        args,
+    })
+}
+
+fn parse_gateway_tor(s: &mut Scan) -> Result<Command> {
+    let action = s
+        .take()
+        .ok_or_else(|| Error::Usage("gateway tor needs check or run".into()))?;
+    if action != "check" && action != "run" {
+        return Err(Error::Usage("gateway tor supports check or run".into()));
+    }
+    let (mut different_from, mut opencode) = (None, false);
+    loop {
+        match s.take() {
+            None => break,
+            Some("--") if action == "run" => break,
+            Some("--different-from") if different_from.is_none() => {
+                different_from = Some(s.value("--different-from")?.parse().map_err(|_| {
+                    Error::Usage("--different-from must be an IPv4 or IPv6 address".into())
+                })?);
+            }
+            Some("--opencode") if action == "run" => opencode = true,
+            Some(other) => return Err(unknown("gateway tor", other)),
+        }
+    }
+    if action == "check" {
+        return Ok(Command::GatewayTorCheck { different_from });
+    }
+    let rest = s.rest();
+    let (program, args) = if opencode {
+        let args = if rest.first().map(String::as_str) == Some("opencode") {
+            rest[1..].to_vec()
+        } else {
+            rest.to_vec()
+        };
+        ("opencode".into(), args)
+    } else {
+        let (program, args) = rest.split_first().ok_or_else(|| {
+            Error::Usage("gateway tor run requires -- <program> [args...]".into())
+        })?;
+        (program.clone(), args.to_vec())
+    };
+    Ok(Command::GatewayTorRun {
         different_from,
         opencode,
         program,
@@ -757,6 +819,44 @@ mod tests {
             "127.0.0.1:1080",
             "--different-from",
             "bad"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn no_vps_tor_gateway_parses_and_rejects_unknown_options() {
+        assert_eq!(
+            parse(&argv(&["gateway", "tor", "check"])).unwrap(),
+            Command::GatewayTorCheck {
+                different_from: None
+            }
+        );
+        assert_eq!(
+            parse(&argv(&[
+                "gateway",
+                "tor",
+                "run",
+                "--different-from",
+                "192.0.2.19",
+                "--opencode",
+                "--",
+                "--version"
+            ]))
+            .unwrap(),
+            Command::GatewayTorRun {
+                different_from: Some("192.0.2.19".parse().unwrap()),
+                opencode: true,
+                program: "opencode".into(),
+                args: vec!["--version".into()],
+            }
+        );
+        assert!(parse(&argv(&["gateway", "tor", "run"])).is_err());
+        assert!(parse(&argv(&[
+            "gateway",
+            "tor",
+            "check",
+            "--socks",
+            "127.0.0.1:9050"
         ]))
         .is_err());
     }

@@ -37,6 +37,13 @@ pub fn dispatch(command: Command) -> Result<i32> {
             program,
             args,
         } => gateway::run(&socks, different_from, opencode, &program, &args),
+        Command::GatewayTorCheck { different_from } => gateway::tor_check(&cfg, different_from),
+        Command::GatewayTorRun {
+            different_from,
+            opencode,
+            program,
+            args,
+        } => gateway::tor_run(&cfg, different_from, opencode, &program, &args),
         Command::Status => diagnose::status(&cfg),
         Command::PrivacyCheck { json } => privacy::check(&cfg, json),
         Command::DesktopServe { port } => desktop::serve(&cfg, port),

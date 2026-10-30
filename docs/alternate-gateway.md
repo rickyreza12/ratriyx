@@ -1,9 +1,42 @@
-# Alternate outbound gateway (local SOCKS5 + owned VPS)
+# Alternate outbound gateways (no VPS Tor or local SOCKS5)
 
 Ratriyx can use a separately operated SOCKS5 endpoint to route proxy-aware
 applications through another public IP. This is useful for connectivity
 testing, privacy, and selecting a network path. **It does not bypass
 OpenCode/provider free-usage limits, account controls, or rate limits.**
+
+## No-VPS option: a second disposable Tor client (Windows)
+
+Ratriyx can start a second local Tor process using the already-installed
+managed Tor executable. It does not need a VPS, VPN subscription, extra
+download or system-wide proxy changes. The new client has a separate data
+directory and loopback SOCKS port, excludes the observed existing Tor exit
+address, and compares its verified Tor Project exit IP to both the original
+Tor exit and the direct public IP before launching the requested program.
+
+```powershell
+cd E:\Projects\NyxRoute\apps
+.\target\release\ratriyx.exe gateway tor check
+.\target\release\ratriyx.exe gateway tor run --opencode -- --version
+.\target\release\ratriyx.exe gateway tor run --opencode -- --standalone
+```
+
+The normal Ratriyx-managed Tor listener must already be running. A fresh
+second instance may take time to fetch network state and bootstrap. When
+the checking command exits, Ratriyx stops *only* the temporary Tor child
+and removes its temporary data directory. The original Tor process remains
+unchanged. If the new instance cannot bootstrap, cannot verify `IsTor=true`,
+or reports an exit equal to an excluded address, the child application is
+not launched. Optional `--different-from IP` also excludes an explicitly
+specified prior IP.
+
+**Limit:** This proves the IP of the exact verification request at that
+moment, not an immutable external IP for every request. Different Tor
+streams may choose other exits, and applications ignoring proxy settings
+may connect directly. Selecting a different route cannot refresh or
+circumvent a service's free-usage quota.
+
+## Optional external SOCKS5 gateway (SSH / VPS)
 
 ## Requirements
 

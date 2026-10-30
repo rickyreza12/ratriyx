@@ -2,6 +2,7 @@
 //! This does not create a VPN, evade provider limits, or enforce OS-wide isolation.
 use crate::domain::error::{Error, Result};
 use crate::domain::route::{self, Mode};
+use crate::infrastructure::config::Config;
 use crate::infrastructure::embedded_proxy::EmbeddedProxy;
 use crate::infrastructure::network::{self, Route};
 use crate::infrastructure::runner;
@@ -96,6 +97,140 @@ pub fn run(
     }
     let env = route::mode_env(Mode::Tor, &url);
     runner::run_child(program, args, &env)
+}
+
+#[cfg(windows)]
+fn existing_tor_exit(cfg: &Config) -> Result<IpAddr> {
+    let address = cfg.tor_socks_addr();
+    network::socks5_greeting(&address).map_err(|_| {
+        Error::Verification(
+            "the existing Tor SOCKS5 listener is unavailable; start the normal Tor route first"
+                .into(),
+        )
+    })?;
+    let socks = socket(&address)?;
+    let proxy = EmbeddedProxy::start(socks)?;
+    let mut config = cfg.clone();
+    config.proxy_host = proxy.address().ip().to_string();
+    config.proxy_port = proxy.address().port();
+    let ip = diagnostics::verify_tor_exit_ip(&config, 20)
+        .map_err(|e| Error::Verification(format!("existing Tor verification failed: {e}")))?
+        .ok_or_else(|| Error::Verification("existing Tor did not report an exit IP".into()))?;
+    ip.parse()
+        .map_err(|_| Error::Verification("existing Tor exit IP is invalid".into()))
+}
+
+/// Run a second, temporary Tor daemon with a new data directory and its own
+/// SOCKS listener. It excludes the current Tor exit while selecting circuits.
+/// This changes the verified probe egress, not the provider account identity.
+#[cfg(windows)]
+fn local_tor_route(
+    cfg: &Config,
+    different_from: Option<IpAddr>,
+) -> Result<(
+    crate::infrastructure::isolated_tor::IsolatedTor,
+    EmbeddedProxy,
+    String,
+)> {
+    use crate::infrastructure::isolated_tor::IsolatedTor;
+
+    let direct = checked_public_ip(&Route::Direct, "direct")?;
+    let existing = existing_tor_exit(cfg)?;
+    eprintln!("ratriyx: direct public IP: {direct}");
+    eprintln!("ratriyx: existing Tor exit IP: {existing}");
+    let mut exclusions = vec![existing];
+    if let Some(previous) = different_from {
+        if !exclusions.contains(&previous) {
+            exclusions.push(previous);
+        }
+    }
+    let isolated = IsolatedTor::start(&exclusions)?;
+    let proxy = EmbeddedProxy::start(isolated.socks())?;
+    let mut config = cfg.clone();
+    config.proxy_host = proxy.address().ip().to_string();
+    config.proxy_port = proxy.address().port();
+    let mut exit_ip = None;
+    for attempt in 1..=4 {
+        match diagnostics::verify_tor_exit_ip(&config, 15) {
+            Ok(Some(value)) => {
+                exit_ip = Some(value.parse::<IpAddr>().map_err(|_| {
+                    Error::Verification("alternate Tor exit returned an invalid IP".into())
+                })?);
+                break;
+            }
+            Ok(None) => return Err(Error::Verification("alternate Tor exit IP missing".into())),
+            Err(reason) if attempt < 4 && transient_bootstrap_failure(&reason) => {
+                eprintln!("ratriyx: new Tor circuit warming up: {reason} ({attempt}/4)");
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+            Err(reason) => {
+                return Err(Error::Verification(format!(
+                    "alternate Tor IsTor check failed: {reason}"
+                )));
+            }
+        }
+    }
+    let exit = exit_ip.ok_or_else(|| Error::Verification("alternate Tor exit not ready".into()))?;
+    eprintln!("ratriyx: alternate Tor exit IP: {exit} (IsTor=true)");
+    changed_ip(direct, exit, Some(existing))?;
+    if different_from == Some(exit) {
+        return Err(Error::Verification(format!(
+            "alternate Tor exit {exit} equals excluded IP; refusing"
+        )));
+    }
+    eprintln!("ratriyx: verified distinct Tor exit; only proxy-aware child connections are scoped");
+    Ok((isolated, proxy, config.proxy_url()))
+}
+
+#[cfg(windows)]
+fn transient_bootstrap_failure(reason: &str) -> bool {
+    reason.contains("connection refused")
+        || reason.contains("timed out")
+        || reason.contains("empty reply")
+}
+
+pub fn tor_check(cfg: &Config, different_from: Option<IpAddr>) -> Result<i32> {
+    #[cfg(windows)]
+    {
+        let (_tor, _proxy, _) = local_tor_route(cfg, different_from)?;
+        say!("second local Tor route: distinct exit verified, temporary process stopped at exit");
+        Ok(0)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (cfg, different_from);
+        Err(Error::Unsupported(
+            "gateway tor currently supports managed Tor on native Windows only".into(),
+        ))
+    }
+}
+
+pub fn tor_run(
+    cfg: &Config,
+    different_from: Option<IpAddr>,
+    opencode: bool,
+    program: &str,
+    args: &[String],
+) -> Result<i32> {
+    #[cfg(windows)]
+    {
+        let (_tor, _proxy, url) = local_tor_route(cfg, different_from)?;
+        if opencode {
+            for note in route::opencode_boundary_notes() {
+                eprintln!("ratriyx: {note}");
+            }
+        }
+        // Tor and proxy stay alive until child exits, then are stopped.
+        let env = route::mode_env(Mode::Tor, &url);
+        runner::run_child(program, args, &env)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (cfg, different_from, opencode, program, args);
+        Err(Error::Unsupported(
+            "gateway tor currently supports managed Tor on native Windows only".into(),
+        ))
+    }
 }
 
 #[cfg(test)]
