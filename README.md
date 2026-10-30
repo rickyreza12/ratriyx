@@ -138,6 +138,7 @@ settings it does not own.
 | `ratriyx gateway run --socks 127.0.0.1:1080 -- PROGRAM` | Run a proxy-aware child only after gateway IP verification |
 | `ratriyx gateway tor check` | Start a disposable second Tor client locally and verify a distinct exit, no VPS (Windows) |
 | `ratriyx gateway tor run --opencode -- --standalone` | Run OpenCode using that separately verified Tor client |
+| `ratriyx gateway tor run --trace-connections --opencode -- --standalone` | Diagnose OpenCode proxy CONNECT destinations and SOCKS outcomes (opt-in metadata only) |
 | `ratriyx privacy check [--json]` | Report verified routing evidence and remaining privacy risks |
 | `ratriyx run --mode tor -- PROGRAM` | Run a proxy-aware application through the embedded frontend |
 | `ratriyx desktop serve --port 8119` | Start a foreground loopback HTTP proxy |
@@ -163,6 +164,14 @@ it against the direct IP and existing Tor exit, and stops it after checking.
 OpenCode exits. It verifies the probe IP at launch, not a permanent static
 IP for every later connection. This does not reset
 OpenCode provider limits or provide OS-wide network isolation.
+
+To inspect the **application** network path, add `--trace-connections` before
+`--opencode`, and use OpenCode's `--standalone` flag to avoid reusing an existing
+server. Traces begin only after Ratriyx's own Tor verification is finished;
+they include destination hostname, port and SOCKS/CONNECT outcome, but no
+authorization headers, prompt or response bodies. An empty trace does **not**
+prove a direct connection: the application may simply have made no request.
+See [alternate gateway diagnostics](docs/alternate-gateway.md).
 
 ## What Ratriyx does not guarantee
 

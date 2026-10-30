@@ -21,6 +21,54 @@ cd E:\Projects\NyxRoute\apps
 .\target\release\ratriyx.exe gateway tor run --opencode -- --standalone
 ```
 
+### Investigate OpenCode's actual outbound requests
+
+Use the newest built binary (the feature-branch version may differ from a
+published or globally installed version). With the app's existing provider
+configuration, launch its own private server and enable *metadata-only* tracing:
+
+```powershell
+.\target\release\ratriyx.exe gateway tor run --trace-connections --opencode -- --standalone
+```
+
+In the OpenCode UI, issue at most one permitted test request with an intended
+model. A non-interactive `opencode run --standalone --model PROVIDER/MODEL
+"test"` can also be used, but choose the model explicitly to avoid unexpected
+charges. Do not run multiple provider requests when a usage limit is exhausted.
+
+`--trace-connections` is off by default and also works with regular `run`
+and external `gateway run`, provided Ratriyx owns the embedded proxy.
+It is deliberately rejected in `run --mode direct` and `run --privoxy`.
+Before launching the child, Ratriyx checks Tor with its *own* requests; those
+are **not** counted. After `application window started`, it prints entries
+such as `CONNECT socks-attempt host=api.example.org port=443`,
+`socks-connected`, `CONNECT tunnel-established`, and a summary of accepted
+clients and successful/failed SOCKS connections.
+
+The trace contains no request path, query, headers, API keys, body, prompt or
+model response. A hostname may itself be sensitive, so review output before
+sharing. If you observe a provider hostname with an established tunnel, that
+is evidence the **observed connection** passed through the Ratriyx bridge;
+it does not prove every subprocess or request did. An empty trace is
+inconclusive when the app has not demonstrably sent a network request.
+Read-only Windows process/TCP inspection can provide supporting evidence,
+but does not reveal TLS request URLs. `--standalone` avoids reusing a
+background OpenCode server whose environment was set before Ratriyx launch.
+
+If OpenCode reports `Free usage limit reached` while a provider CONNECT tunnel
+is observed, treat the provider quota response separately from local routing.
+Do not retry exhausted free models or rotate accounts to evade provider limits.
+
+**Observed on Windows, 2026-10-31:** One minimal OpenCode `run --standalone`
+test using the original managed Tor route produced proxied CONNECT tunnels to
+`models.opencode.ai:443` and `opencode.ai:443`, followed by OpenCode's
+`Free usage limit reached` response. Other app-phase proxy connections were
+also observed. No raw HTTP model request was decrypted, so this establishes
+provider-domain connection routing and response correlation, not proof that
+every connection or HTTP request from OpenCode was proxied. A separate attempt
+on the disposable second Tor route failed to bootstrap beyond 67% in 180 seconds
+and correctly refused child launch. The primary Tor route remained functional.
+
 The normal Ratriyx-managed Tor listener must already be running. A fresh
 second instance may take time to fetch network state and bootstrap. When
 the checking command exits, Ratriyx stops *only* the temporary Tor child

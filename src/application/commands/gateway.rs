@@ -58,11 +58,19 @@ fn changed_ip(direct: IpAddr, routed: IpAddr, excluded: Option<IpAddr>) -> Resul
     Ok(())
 }
 
-fn verify(socks: &str, different_from: Option<IpAddr>) -> Result<(EmbeddedProxy, String)> {
+fn verify(
+    socks: &str,
+    different_from: Option<IpAddr>,
+    trace_connections: bool,
+) -> Result<(EmbeddedProxy, String)> {
     let endpoint = socket(socks)?;
     network::socks5_greeting(socks)
         .map_err(|error| Error::Verification(format!("SOCKS5 gateway not ready: {error}")))?;
-    let proxy = EmbeddedProxy::start(endpoint)?;
+    let proxy = if trace_connections {
+        EmbeddedProxy::start_traced(endpoint)?
+    } else {
+        EmbeddedProxy::start(endpoint)?
+    };
     let url = format!("http://{}", proxy.address());
     // Verify the precise embedded proxy that will be passed to the child,
     // not the system proxy or an unrelated SOCKS5 listener.
@@ -76,7 +84,7 @@ fn verify(socks: &str, different_from: Option<IpAddr>) -> Result<(EmbeddedProxy,
 }
 
 pub fn check(socks: &str, different_from: Option<IpAddr>) -> Result<i32> {
-    let (_proxy, _url) = verify(socks, different_from)?;
+    let (_proxy, _url) = verify(socks, different_from, false)?;
     say!("gateway check: verified public egress different from direct");
     say!("scope: proxy-aware applications only; not OS-wide network isolation");
     Ok(0)
@@ -85,18 +93,22 @@ pub fn check(socks: &str, different_from: Option<IpAddr>) -> Result<i32> {
 pub fn run(
     socks: &str,
     different_from: Option<IpAddr>,
+    trace_connections: bool,
     opencode: bool,
     program: &str,
     args: &[String],
 ) -> Result<i32> {
-    let (_proxy, url) = verify(socks, different_from)?;
+    let (proxy, url) = verify(socks, different_from, trace_connections)?;
     if opencode {
         for note in route::opencode_boundary_notes() {
             eprintln!("ratriyx: {note}");
         }
     }
     let env = route::mode_env(Mode::Tor, &url);
-    runner::run_child(program, args, &env)
+    proxy.begin_application_trace();
+    let result = runner::run_child(program, args, &env);
+    proxy.end_application_trace();
+    result
 }
 
 #[cfg(windows)]
@@ -127,6 +139,7 @@ fn existing_tor_exit(cfg: &Config) -> Result<IpAddr> {
 fn local_tor_route(
     cfg: &Config,
     different_from: Option<IpAddr>,
+    trace_connections: bool,
 ) -> Result<(
     crate::infrastructure::isolated_tor::IsolatedTor,
     EmbeddedProxy,
@@ -145,7 +158,11 @@ fn local_tor_route(
         }
     }
     let isolated = IsolatedTor::start(&exclusions)?;
-    let proxy = EmbeddedProxy::start(isolated.socks())?;
+    let proxy = if trace_connections {
+        EmbeddedProxy::start_traced(isolated.socks())?
+    } else {
+        EmbeddedProxy::start(isolated.socks())?
+    };
     let mut config = cfg.clone();
     config.proxy_host = proxy.address().ip().to_string();
     config.proxy_port = proxy.address().port();
@@ -192,7 +209,7 @@ fn transient_bootstrap_failure(reason: &str) -> bool {
 pub fn tor_check(cfg: &Config, different_from: Option<IpAddr>) -> Result<i32> {
     #[cfg(windows)]
     {
-        let (_tor, _proxy, _) = local_tor_route(cfg, different_from)?;
+        let (_tor, _proxy, _) = local_tor_route(cfg, different_from, false)?;
         say!("second local Tor route: distinct exit verified, temporary process stopped at exit");
         Ok(0)
     }
@@ -208,13 +225,14 @@ pub fn tor_check(cfg: &Config, different_from: Option<IpAddr>) -> Result<i32> {
 pub fn tor_run(
     cfg: &Config,
     different_from: Option<IpAddr>,
+    trace_connections: bool,
     opencode: bool,
     program: &str,
     args: &[String],
 ) -> Result<i32> {
     #[cfg(windows)]
     {
-        let (_tor, _proxy, url) = local_tor_route(cfg, different_from)?;
+        let (_tor, proxy, url) = local_tor_route(cfg, different_from, trace_connections)?;
         if opencode {
             for note in route::opencode_boundary_notes() {
                 eprintln!("ratriyx: {note}");
@@ -222,11 +240,21 @@ pub fn tor_run(
         }
         // Tor and proxy stay alive until child exits, then are stopped.
         let env = route::mode_env(Mode::Tor, &url);
-        runner::run_child(program, args, &env)
+        proxy.begin_application_trace();
+        let result = runner::run_child(program, args, &env);
+        proxy.end_application_trace();
+        result
     }
     #[cfg(not(windows))]
     {
-        let _ = (cfg, different_from, opencode, program, args);
+        let _ = (
+            cfg,
+            different_from,
+            trace_connections,
+            opencode,
+            program,
+            args,
+        );
         Err(Error::Unsupported(
             "gateway tor currently supports managed Tor on native Windows only".into(),
         ))
@@ -266,7 +294,15 @@ mod tests {
 
     #[test]
     fn missing_gateway_refuses_before_starting_child() {
-        let error = run("127.0.0.1:1", None, false, "definitely-missing-child", &[]).unwrap_err();
+        let error = run(
+            "127.0.0.1:1",
+            None,
+            false,
+            false,
+            "definitely-missing-child",
+            &[],
+        )
+        .unwrap_err();
         assert_eq!(error.exit_code(), 4);
         assert!(error.to_string().contains("SOCKS5 gateway not ready"));
     }

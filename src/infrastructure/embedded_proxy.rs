@@ -6,7 +6,7 @@ use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const HEADER_LIMIT: usize = 32 * 1024;
 const MAX_CLIENTS: usize = 64;
@@ -17,6 +17,63 @@ pub struct EmbeddedProxy {
     address: SocketAddr,
     running: Arc<AtomicBool>,
     listener_thread: Option<JoinHandle<()>>,
+    trace: Option<Arc<ConnectionTrace>>,
+}
+
+/// Records only destination authorities and transport outcomes, never request
+/// headers, paths, payloads, provider responses, or authentication data.
+#[derive(Default)]
+struct ConnectionTrace {
+    application_phase: AtomicBool,
+    accepted: AtomicUsize,
+    socks_attempts: AtomicUsize,
+    socks_connected: AtomicUsize,
+    socks_failed: AtomicUsize,
+    tunnels: AtomicUsize,
+}
+
+impl ConnectionTrace {
+    fn event(&self, id: usize, outcome: &str, dest: Option<&Destination>) {
+        let ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        eprintln!("{}", format_event(ms, id, outcome, dest));
+    }
+
+    fn accept(&self) -> Option<usize> {
+        self.application_phase.load(Ordering::Acquire).then(|| {
+            let id = self.accepted.fetch_add(1, Ordering::AcqRel) + 1;
+            self.event(id, "client-accepted", None);
+            id
+        })
+    }
+
+    fn summary(&self) {
+        eprintln!(
+            "ratriyx trace: app summary accepted={} socks_attempted={} socks_connected={} socks_failed={} connect_tunnels={}",
+            self.accepted.load(Ordering::Acquire),
+            self.socks_attempts.load(Ordering::Acquire),
+            self.socks_connected.load(Ordering::Acquire),
+            self.socks_failed.load(Ordering::Acquire),
+            self.tunnels.load(Ordering::Acquire)
+        );
+        eprintln!(
+            "ratriyx trace: observations cover only this local proxy, not direct or out-of-process connections"
+        );
+    }
+}
+
+fn format_event(ms: u128, id: usize, outcome: &str, dest: Option<&Destination>) -> String {
+    // `dest` has passed the strict authority parser. No request target,
+    // headers or arbitrary error strings ever appear in this output.
+    match dest {
+        Some(dest) => format!(
+            "ratriyx trace: ts_ms={ms} connection={id} {outcome} host={} port={}",
+            dest.host, dest.port
+        ),
+        None => format!("ratriyx trace: ts_ms={ms} connection={id} {outcome}"),
+    }
 }
 
 impl EmbeddedProxy {
@@ -24,9 +81,19 @@ impl EmbeddedProxy {
         Self::start_on(socks, 0)
     }
 
+    /// Opt-in metadata trace: callers explicitly mark the application window
+    /// after all pre-launch route verification has completed.
+    pub fn start_traced(socks: SocketAddr) -> Result<Self> {
+        Self::start_on_inner(socks, 0, true)
+    }
+
     /// Bind a fixed loopback port for an explicitly managed desktop proxy.
     /// Port 0 retains the ephemeral per-process routing behavior.
     pub fn start_on(socks: SocketAddr, port: u16) -> Result<Self> {
+        Self::start_on_inner(socks, port, false)
+    }
+
+    fn start_on_inner(socks: SocketAddr, port: u16, tracing: bool) -> Result<Self> {
         if !socks.ip().is_loopback() || socks.port() == 0 {
             return Err(Error::Config(
                 "embedded proxy requires a loopback Tor SOCKS5 endpoint".into(),
@@ -43,19 +110,36 @@ impl EmbeddedProxy {
             .map_err(|e| Error::Io(e.to_string()))?;
         let running = Arc::new(AtomicBool::new(true));
         let flag = Arc::clone(&running);
+        let trace = tracing.then(|| Arc::new(ConnectionTrace::default()));
+        let listener_trace = trace.clone();
         let listener_thread = thread::Builder::new()
             .name("ratriyx-http-proxy".into())
-            .spawn(move || serve(listener, socks, flag))
+            .spawn(move || serve(listener, socks, flag, listener_trace))
             .map_err(|e| Error::Io(format!("cannot start embedded proxy: {e}")))?;
         Ok(Self {
             address,
             running,
             listener_thread: Some(listener_thread),
+            trace,
         })
     }
 
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    pub fn begin_application_trace(&self) {
+        if let Some(trace) = &self.trace {
+            trace.application_phase.store(true, Ordering::Release);
+            eprintln!("ratriyx trace: application window started (preflight probes excluded)");
+        }
+    }
+
+    pub fn end_application_trace(&self) {
+        if let Some(trace) = &self.trace {
+            trace.application_phase.store(false, Ordering::Release);
+            trace.summary();
+        }
     }
 }
 
@@ -68,11 +152,17 @@ impl Drop for EmbeddedProxy {
     }
 }
 
-fn serve(listener: TcpListener, socks: SocketAddr, running: Arc<AtomicBool>) {
+fn serve(
+    listener: TcpListener,
+    socks: SocketAddr,
+    running: Arc<AtomicBool>,
+    trace: Option<Arc<ConnectionTrace>>,
+) {
     let active = Arc::new(AtomicUsize::new(0));
     while running.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((mut client, _)) => {
+                let trace_id = trace.as_ref().and_then(|trace| trace.accept());
                 // Accepted sockets can inherit listener nonblocking mode on
                 // Windows. Tunnel copies require blocking sockets with timeouts.
                 if client.set_nonblocking(false).is_err() {
@@ -84,10 +174,11 @@ fn serve(listener: TcpListener, socks: SocketAddr, running: Arc<AtomicBool>) {
                     continue;
                 }
                 let counter = Arc::clone(&active);
+                let client_trace = trace.clone();
                 if thread::Builder::new()
                     .name("ratriyx-proxy-client".into())
                     .spawn(move || {
-                        let _ = handle(&mut client, socks);
+                        let _ = handle(&mut client, socks, client_trace.as_deref(), trace_id);
                         counter.fetch_sub(1, Ordering::AcqRel);
                     })
                     .is_err()
@@ -272,7 +363,12 @@ fn respond(client: &mut TcpStream, code: u16, description: &str) -> io::Result<(
     )
 }
 
-fn handle(client: &mut TcpStream, socks: SocketAddr) -> io::Result<()> {
+fn handle(
+    client: &mut TcpStream,
+    socks: SocketAddr,
+    trace: Option<&ConnectionTrace>,
+    trace_id: Option<usize>,
+) -> io::Result<()> {
     client.set_read_timeout(Some(Duration::from_secs(15)))?;
     client.set_write_timeout(Some(IO_TIMEOUT))?;
     let (head, prefetched) = match read_request(client) {
@@ -347,9 +443,31 @@ fn handle(client: &mut TcpStream, socks: SocketAddr) -> io::Result<()> {
             _ => forwarded.push(format!("{name}:{value}\r\n")),
         }
     }
+    if let (Some(trace), Some(id)) = (trace, trace_id) {
+        trace.socks_attempts.fetch_add(1, Ordering::AcqRel);
+        trace.event(
+            id,
+            if is_connect {
+                "CONNECT socks-attempt"
+            } else {
+                "HTTP socks-attempt"
+            },
+            Some(&dest),
+        );
+    }
     let mut upstream = match socks_connect(socks, &dest) {
-        Ok(stream) => stream,
+        Ok(stream) => {
+            if let (Some(trace), Some(id)) = (trace, trace_id) {
+                trace.socks_connected.fetch_add(1, Ordering::AcqRel);
+                trace.event(id, "socks-connected", Some(&dest));
+            }
+            stream
+        }
         Err(e) => {
+            if let (Some(trace), Some(id)) = (trace, trace_id) {
+                trace.socks_failed.fetch_add(1, Ordering::AcqRel);
+                trace.event(id, "socks-failed", Some(&dest));
+            }
             let _ = respond(client, 502, "Bad Gateway");
             return Err(e);
         }
@@ -357,6 +475,10 @@ fn handle(client: &mut TcpStream, socks: SocketAddr) -> io::Result<()> {
     client.set_read_timeout(Some(IO_TIMEOUT))?;
     if is_connect {
         client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
+        if let (Some(trace), Some(id)) = (trace, trace_id) {
+            trace.tunnels.fetch_add(1, Ordering::AcqRel);
+            trace.event(id, "CONNECT tunnel-established", Some(&dest));
+        }
         if !prefetched.is_empty() {
             upstream.write_all(&prefetched)?;
         }
@@ -460,6 +582,74 @@ mod tests {
 
     const SOCKS_OK: &[u8] = &[5, 0, 0, 1, 127, 0, 0, 1, 0, 80];
     const SOCKS_FAIL: &[u8] = &[5, 5, 0, 1, 0, 0, 0, 0, 0, 0];
+
+    #[test]
+    fn trace_is_opt_in_and_metadata_contains_no_request_details() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = EmbeddedProxy::start(listener.local_addr().unwrap()).unwrap();
+        assert!(proxy.trace.is_none());
+        let dest = destination("api.example.org:443", 443).unwrap();
+        let line = format_event(123, 7, "CONNECT tunnel-established", Some(&dest));
+        assert!(line.contains("host=api.example.org port=443"));
+        for secret in [
+            "Authorization",
+            "Bearer",
+            "secret-key",
+            "/private",
+            "?token=",
+        ] {
+            assert!(!line.contains(secret));
+        }
+    }
+
+    #[test]
+    fn trace_counts_only_post_verification_connections() {
+        let (socks, task) = fake_socks(SOCKS_OK);
+        let proxy = EmbeddedProxy::start_traced(socks).unwrap();
+        let trace = proxy.trace.as_ref().unwrap();
+        // A rejected pre-launch HTTP request is excluded from application counts.
+        let mut before = TcpStream::connect(proxy.address()).unwrap();
+        before.write_all(b"INVALID\r\n\r\n").unwrap();
+        let mut ignored = Vec::new();
+        before.read_to_end(&mut ignored).unwrap();
+        assert_eq!(trace.accepted.load(Ordering::Acquire), 0);
+
+        proxy.begin_application_trace();
+        let mut app = TcpStream::connect(proxy.address()).unwrap();
+        app.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        app.write_all(
+            b"CONNECT api.example.org:443 HTTP/1.1\r\nAuthorization: Bearer secret-key\r\n\r\nTEST",
+        )
+        .unwrap();
+        let mut response = [0; 256];
+        let n = app.read(&mut response).unwrap();
+        assert!(String::from_utf8_lossy(&response[..n]).contains("200 Connection Established"));
+        task.join().unwrap();
+        proxy.end_application_trace();
+        assert_eq!(trace.accepted.load(Ordering::Acquire), 1);
+        assert_eq!(trace.socks_attempts.load(Ordering::Acquire), 1);
+        assert_eq!(trace.socks_connected.load(Ordering::Acquire), 1);
+        assert_eq!(trace.tunnels.load(Ordering::Acquire), 1);
+        assert_eq!(trace.socks_failed.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn trace_reports_socks_failure_without_direct_fallback() {
+        let (socks, task) = fake_socks(SOCKS_FAIL);
+        let proxy = EmbeddedProxy::start_traced(socks).unwrap();
+        proxy.begin_application_trace();
+        let mut app = TcpStream::connect(proxy.address()).unwrap();
+        app.write_all(b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        app.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 502"));
+        task.join().unwrap();
+        let trace = proxy.trace.as_ref().unwrap();
+        assert_eq!(trace.socks_failed.load(Ordering::Acquire), 1);
+        assert_eq!(trace.socks_connected.load(Ordering::Acquire), 0);
+        assert_eq!(trace.tunnels.load(Ordering::Acquire), 0);
+    }
 
     #[test]
     fn request_get_uses_remote_socks_dns_and_rewrites_absolute_path() {

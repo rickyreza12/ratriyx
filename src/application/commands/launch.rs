@@ -16,6 +16,7 @@ pub struct RunOptions<'a> {
     pub verify: Verify,
     pub strict: bool,
     pub embedded_proxy: bool,
+    pub trace_connections: bool,
     pub opencode: bool,
     pub program: &'a str,
     pub args: &'a [String],
@@ -27,6 +28,7 @@ pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
         verify,
         strict,
         embedded_proxy,
+        trace_connections,
         opencode,
         program,
         args,
@@ -53,7 +55,11 @@ pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
             .tor_socks_addr()
             .parse()
             .map_err(|_| Error::Config("invalid Tor SOCKS5 socket address".into()))?;
-        let server = EmbeddedProxy::start(socks)?;
+        let server = if trace_connections {
+            EmbeddedProxy::start_traced(socks)?
+        } else {
+            EmbeddedProxy::start(socks)?
+        };
         embedded_cfg.proxy_host = server.address().ip().to_string();
         embedded_cfg.proxy_port = server.address().port();
         Some(server)
@@ -125,7 +131,14 @@ pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
                 }
             }
             let plan = route::mode_env(mode, &cfg.proxy_url());
-            runner::run_child(program, args, &plan)
+            if let Some(proxy) = &_embedded {
+                proxy.begin_application_trace();
+            }
+            let result = runner::run_child(program, args, &plan);
+            if let Some(proxy) = &_embedded {
+                proxy.end_application_trace();
+            }
+            result
         }
     }
 }

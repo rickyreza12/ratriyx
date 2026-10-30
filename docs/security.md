@@ -58,6 +58,15 @@ Known gaps: Privoxy `--config-test` is not used as a gate because it exits 0 for
 10. **Enforcement is limited.** Ratriyx verifies and refuses in its own launch path. It cannot force an arbitrary program onto Tor.
 11. **Rate limits are not route problems.** A provider's HTTP 429 remains a provider limit. `rotate --yes` can request a Tor NEWNYM for circuit separation, subject to Tor cooldown and without an exit-IP guarantee. It does not retry provider requests or reset account quotas.
 
+**Opt-in connection tracing:** `--trace-connections` on an owned embedded proxy
+records only destination hostname/port and transport outcome during the child
+run window. It does not record HTTP headers, URL paths, authorization tokens,
+request/response bodies or prompts. Hostnames themselves may be private;
+inspect output before copying or posting it. Application-phase counters exclude
+Ratriyx's pre-launch verification probes. Connection metadata cannot prove
+the absence of direct traffic, enforce a firewall or attribute every socket
+to the intended child process.
+
 ## v0.4 desktop integration boundary
 
 `ratriyx desktop serve` can run a loopback-only unauthenticated HTTP proxy for
