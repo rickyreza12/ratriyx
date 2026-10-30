@@ -61,6 +61,48 @@ fn staged_platforms_are_not_rejected_with_exit_three() {
 }
 
 #[test]
+fn strict_check_never_claims_guard_active() {
+    let out = ratriyx(&["strict", "check"]);
+    // Windows hosted CI may not grant WFP session permissions.
+    // Both outcomes are safe: availability or explicit refusal.
+    if cfg!(windows) {
+        assert!(matches!(out.status.code(), Some(0) | Some(3)));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if out.status.code() == Some(0) {
+            assert!(stdout.contains("no filters installed"));
+            assert!(stdout.contains("NOT ACTIVE"));
+        }
+    } else {
+        assert_eq!(out.status.code(), Some(3));
+    }
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("strict policy: ACTIVE"));
+}
+
+#[test]
+fn strict_mode_refuses_without_os_enforcement_before_child_launch() {
+    // The executable does not exist. If strict starts resolution or launch
+    // before acquiring the guard, it would produce a different error.
+    let out = ratriyx(&["run", "--strict", "--", "this-must-never-launch"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("strict routing is not available"), "{err}");
+    assert!(err.contains("Refusing to start"), "{err}");
+}
+
+#[test]
+fn strict_mode_has_no_unverified_or_direct_fallback() {
+    for args in [
+        vec!["run", "--strict", "--mode", "direct", "--", "ignored"],
+        vec!["run", "--strict", "--allow-unverified", "--", "ignored"],
+    ] {
+        let out = ratriyx(&args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+    }
+}
+
+#[test]
 fn doctor_json_flag_is_accepted_by_the_parser() {
     let out = ratriyx(&["doctor", "--json", "--mode", "bogus"]);
     assert_eq!(out.status.code(), Some(2));

@@ -2,14 +2,22 @@ use crate::domain::error::{Error, Result};
 use crate::domain::route::{Mode, Verify};
 
 pub const HELP: &str = "\
-ratriyx: per-process privacy routing through Tor and Privoxy (Linux, Windows, macOS)
+ratriyx: per-process privacy routing through Tor (Linux, Windows, macOS)
 
 USAGE:
   ratriyx doctor [--json] [--mode direct|tor] [--app opencode]
-  ratriyx ip
+  ratriyx ip [--privoxy]
+  ratriyx gateway check --socks 127.0.0.1:1080 [--different-from IP]
+  ratriyx gateway run --socks 127.0.0.1:1080 [--different-from IP] [--trace-connections] -- <program> [args...]
+  ratriyx gateway run --socks 127.0.0.1:1080 [--different-from IP] --opencode [-- args...]
+  ratriyx gateway tor check [--different-from IP]           (Windows, no VPS)
+  ratriyx gateway tor run [--different-from IP] [--trace-connections] --opencode [-- args...]
   ratriyx status
-  ratriyx run [--mode direct|tor] [--require-tor|--allow-unverified] -- <program> [args...]
-  ratriyx run --opencode [--mode direct|tor] [--allow-unverified] [-- args...]
+  ratriyx privacy check [--json]
+  ratriyx desktop serve [--port 8119]
+  ratriyx desktop on|off --target windows|powershell|pwsh|zed [--port 8119] [--yes]
+  ratriyx run [--mode direct|tor] [--require-tor|--allow-unverified] [--strict] [--embedded-proxy|--privoxy] [--trace-connections] -- <program> [args...]
+  ratriyx run --opencode [--mode direct|tor] [--allow-unverified] [--strict] [--embedded-proxy|--privoxy] [-- args...]
   ratriyx env --shell bash|zsh|fish|powershell [--mode direct|tor] [--session NAME]
   ratriyx on  [--shell bash|zsh|fish|powershell] [--session NAME]
   ratriyx off [--shell bash|zsh|fish|powershell] [--session NAME]
@@ -21,12 +29,28 @@ USAGE:
   ratriyx uninstall [--yes] [--remove-tor] [--remove-privoxy]
   ratriyx uninstall --yes --remove-untracked-privoxy
   ratriyx uninstall --remove-managed [--yes]
-  ratriyx rotate [--yes]
+  ratriyx rotate [--yes] | ratriyx rotate status
+  ratriyx strict check
   ratriyx config migrate [--yes]
   ratriyx --help | --version
 
-Ratriyx changes only the environment of the processes it starts. It never edits
-system-wide proxy settings. Privileged actions need --yes after review.
+Per-process run does not change system settings. Desktop integrations are opt-in,
+require --yes, and use a verified foreground proxy. Windows is current-user WinINet,
+not WinHTTP, all protocols, or a firewall. Restore settings with desktop off.
+--strict requires OS enforcement and currently refuses to launch.
+Tor run, ip, doctor and status use a temporary embedded Rust HTTP-to-Tor SOCKS5 proxy.
+Windows run restarts installed Ratriyx-managed Tor when its listener is absent.
+--privoxy explicitly selects the historical external HTTP proxy. --embedded-proxy is retained.
+--allow-unverified requires an explicit --privoxy opt-in. Neither path is a leak-proof firewall.
+env/on in Tor mode are refused because their shell cannot own a temporary proxy;
+use ratriyx run --mode tor instead.
+Gateway mode requires a separately operated loopback SOCKS5 listener (e.g. SSH -D).
+It refuses unverified or unchanged egress IP; it cannot reset provider quotas.
+Gateway tor starts another temporary local Tor client, verifies its exit differs
+from direct and the existing Tor exit, and stops it on completion.
+--trace-connections shows opt-in destination host/port and SOCKS outcomes only
+for accepted proxy connections during the launched child window. It does NOT
+prove all the child's traffic used the proxy. Never logs request content.
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +59,26 @@ pub enum ShellKind {
     Zsh,
     Fish,
     PowerShell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopTarget {
+    Windows,
+    PowerShell,
+    Pwsh,
+    Zed,
+}
+
+fn desktop_target(name: &str) -> Result<DesktopTarget> {
+    match name {
+        "windows" => Ok(DesktopTarget::Windows),
+        "powershell" => Ok(DesktopTarget::PowerShell),
+        "pwsh" => Ok(DesktopTarget::Pwsh),
+        "zed" => Ok(DesktopTarget::Zed),
+        _ => Err(Error::Usage(
+            "desktop target must be windows, powershell, pwsh, or zed".into(),
+        )),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,11 +90,50 @@ pub enum Command {
         mode: Mode,
         app: Option<String>,
     },
-    Ip,
+    Ip {
+        privoxy: bool,
+    },
+    GatewayCheck {
+        socks: String,
+        different_from: Option<std::net::IpAddr>,
+    },
+    GatewayRun {
+        socks: String,
+        different_from: Option<std::net::IpAddr>,
+        trace_connections: bool,
+        opencode: bool,
+        program: String,
+        args: Vec<String>,
+    },
+    GatewayTorCheck {
+        different_from: Option<std::net::IpAddr>,
+    },
+    GatewayTorRun {
+        different_from: Option<std::net::IpAddr>,
+        trace_connections: bool,
+        opencode: bool,
+        program: String,
+        args: Vec<String>,
+    },
     Status,
+    PrivacyCheck {
+        json: bool,
+    },
+    DesktopServe {
+        port: u16,
+    },
+    DesktopChange {
+        target: DesktopTarget,
+        enable: bool,
+        yes: bool,
+        port: u16,
+    },
     Run {
         mode: Mode,
         verify: Verify,
+        strict: bool,
+        embedded_proxy: bool,
+        trace_connections: bool,
         opencode: bool,
         program: String,
         args: Vec<String>,
@@ -98,6 +181,8 @@ pub enum Command {
     Rotate {
         yes: bool,
     },
+    RotateStatus,
+    StrictCheck,
     ConfigMigrate {
         yes: bool,
     },
@@ -184,13 +269,63 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             Ok(Command::Doctor { json, mode, app })
         }
-        "ip" => {
-            no_extra_args("ip", &mut s)?;
-            Ok(Command::Ip)
-        }
+        "ip" => match s.take() {
+            None => Ok(Command::Ip { privoxy: false }),
+            Some("--privoxy") if s.take().is_none() => Ok(Command::Ip { privoxy: true }),
+            Some(other) => Err(unknown("ip", other)),
+        },
+        "gateway" => parse_gateway(&mut s),
         "status" => {
             no_extra_args("status", &mut s)?;
             Ok(Command::Status)
+        }
+        "privacy" => match s.take() {
+            Some("check") => {
+                let mut json = false;
+                while let Some(arg) = s.take() {
+                    match arg {
+                        "--json" => json = true,
+                        other => return Err(unknown("privacy check", other)),
+                    }
+                }
+                Ok(Command::PrivacyCheck { json })
+            }
+            _ => Err(Error::Usage("privacy supports only: check [--json]".into())),
+        },
+        "desktop" => {
+            let action = s
+                .take()
+                .ok_or_else(|| Error::Usage("desktop requires serve, on, or off".into()))?;
+            if !matches!(action, "serve" | "on" | "off") {
+                return Err(Error::Usage("desktop requires serve, on, or off".into()));
+            }
+            let (mut port, mut yes, mut target) = (8119u16, false, None);
+            while let Some(arg) = s.take() {
+                match arg {
+                    "--port" => {
+                        port = s
+                            .value("--port")?
+                            .parse()
+                            .map_err(|_| Error::Usage("desktop --port requires 1..65535".into()))?
+                    }
+                    "--yes" if action != "serve" => yes = true,
+                    "--target" if action != "serve" => {
+                        target = Some(desktop_target(s.value("--target")?)?)
+                    }
+                    other => return Err(unknown("desktop", other)),
+                }
+            }
+            if action == "serve" {
+                Ok(Command::DesktopServe { port })
+            } else {
+                Ok(Command::DesktopChange {
+                    target: target
+                        .ok_or_else(|| Error::Usage("desktop on/off needs --target".into()))?,
+                    enable: action == "on",
+                    yes,
+                    port,
+                })
+            }
         }
         "run" => parse_run(&mut s),
         "env" => {
@@ -351,9 +486,21 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 remove_untracked_privoxy: untracked,
             })
         }
-        "rotate" => Ok(Command::Rotate {
-            yes: parse_yes(&mut s, "rotate")?,
-        }),
+        "rotate" => {
+            if s.rest().first().map(String::as_str) == Some("status") {
+                s.take();
+                no_extra_args("rotate status", &mut s)?;
+                Ok(Command::RotateStatus)
+            } else {
+                Ok(Command::Rotate {
+                    yes: parse_yes(&mut s, "rotate")?,
+                })
+            }
+        }
+        "strict" => match s.take() {
+            Some("check") if s.take().is_none() => Ok(Command::StrictCheck),
+            _ => Err(Error::Usage("strict supports only: check".into())),
+        },
         "config" => match s.take() {
             Some("migrate") => Ok(Command::ConfigMigrate {
                 yes: parse_yes(&mut s, "config migrate")?,
@@ -377,8 +524,126 @@ fn parse_yes(s: &mut Scan, command: &str) -> Result<bool> {
     Ok(yes)
 }
 
+fn parse_gateway(s: &mut Scan) -> Result<Command> {
+    let action = s
+        .take()
+        .ok_or_else(|| Error::Usage("gateway needs check or run".into()))?;
+    if action == "tor" {
+        return parse_gateway_tor(s);
+    }
+    if action != "check" && action != "run" {
+        return Err(Error::Usage("gateway supports only check or run".into()));
+    }
+    let (mut socks, mut different_from, mut opencode, mut trace_connections) =
+        (None, None, false, false);
+    loop {
+        match s.take() {
+            None => break,
+            Some("--") if action == "run" => break,
+            Some("--socks") if socks.is_none() => {
+                socks = Some(s.value("--socks")?.to_string());
+            }
+            Some("--different-from") if different_from.is_none() => {
+                different_from = Some(s.value("--different-from")?.parse().map_err(|_| {
+                    Error::Usage("--different-from must be a valid IPv4 or IPv6 address".into())
+                })?);
+            }
+            Some("--opencode") if action == "run" => opencode = true,
+            Some("--trace-connections") if action == "run" => trace_connections = true,
+            Some(arg) if action == "run" && opencode && arg == "--" => break,
+            Some(other) => return Err(unknown("gateway", other)),
+        }
+    }
+    let socks = socks.ok_or_else(|| Error::Usage("gateway requires --socks HOST:PORT".into()))?;
+    if action == "check" {
+        return Ok(Command::GatewayCheck {
+            socks,
+            different_from,
+        });
+    }
+    let rest = s.rest();
+    let (program, args) = if opencode {
+        let args = if rest.first().map(String::as_str) == Some("opencode") {
+            rest[1..].to_vec()
+        } else {
+            rest.to_vec()
+        };
+        ("opencode".to_string(), args)
+    } else {
+        let (program, args) = rest
+            .split_first()
+            .ok_or_else(|| Error::Usage("gateway run needs -- <program> [args...]".into()))?;
+        (program.clone(), args.to_vec())
+    };
+    Ok(Command::GatewayRun {
+        socks,
+        different_from,
+        trace_connections,
+        opencode,
+        program,
+        args,
+    })
+}
+
+fn parse_gateway_tor(s: &mut Scan) -> Result<Command> {
+    let action = s
+        .take()
+        .ok_or_else(|| Error::Usage("gateway tor needs check or run".into()))?;
+    if action != "check" && action != "run" {
+        return Err(Error::Usage("gateway tor supports check or run".into()));
+    }
+    let (mut different_from, mut opencode, mut trace_connections) = (None, false, false);
+    loop {
+        match s.take() {
+            None => break,
+            Some("--") if action == "run" => break,
+            Some("--different-from") if different_from.is_none() => {
+                different_from = Some(s.value("--different-from")?.parse().map_err(|_| {
+                    Error::Usage("--different-from must be an IPv4 or IPv6 address".into())
+                })?);
+            }
+            Some("--opencode") if action == "run" => opencode = true,
+            Some("--trace-connections") if action == "run" => trace_connections = true,
+            Some(other) => return Err(unknown("gateway tor", other)),
+        }
+    }
+    if action == "check" {
+        return Ok(Command::GatewayTorCheck { different_from });
+    }
+    let rest = s.rest();
+    let (program, args) = if opencode {
+        let args = if rest.first().map(String::as_str) == Some("opencode") {
+            rest[1..].to_vec()
+        } else {
+            rest.to_vec()
+        };
+        ("opencode".into(), args)
+    } else {
+        let (program, args) = rest.split_first().ok_or_else(|| {
+            Error::Usage("gateway tor run requires -- <program> [args...]".into())
+        })?;
+        (program.clone(), args.to_vec())
+    };
+    Ok(Command::GatewayTorRun {
+        different_from,
+        trace_connections,
+        opencode,
+        program,
+        args,
+    })
+}
+
 fn parse_run(s: &mut Scan) -> Result<Command> {
-    let (mut mode, mut require, mut allow, mut opencode) = (Mode::Tor, false, false, false);
+    let (
+        mut mode,
+        mut require,
+        mut allow,
+        mut strict,
+        mut explicit_embedded,
+        mut privoxy,
+        mut opencode,
+        mut trace_connections,
+    ) = (Mode::Tor, false, false, false, false, false, false, false);
     loop {
         match s.take() {
             None if opencode => break,
@@ -387,13 +652,43 @@ fn parse_run(s: &mut Scan) -> Result<Command> {
             Some("--mode") => mode = parse_mode(s.value("--mode")?)?,
             Some("--require-tor") => require = true,
             Some("--allow-unverified") => allow = true,
+            Some("--strict") => strict = true,
+            Some("--embedded-proxy") => explicit_embedded = true,
+            Some("--privoxy") => privoxy = true,
             Some("--opencode") => opencode = true,
+            Some("--trace-connections") => trace_connections = true,
             Some(other) => return Err(unknown("run", other)),
         }
     }
     if require && allow {
         return Err(Error::Usage(
             "--require-tor and --allow-unverified are mutually exclusive".into(),
+        ));
+    }
+    if strict && (mode != Mode::Tor || allow) {
+        return Err(Error::Usage(
+            "--strict requires --mode tor and cannot combine with --allow-unverified".into(),
+        ));
+    }
+    if explicit_embedded && privoxy {
+        return Err(Error::Usage(
+            "--embedded-proxy and --privoxy are mutually exclusive".into(),
+        ));
+    }
+    if (explicit_embedded || privoxy) && mode != Mode::Tor {
+        return Err(Error::Usage(
+            "proxy backend flags require --mode tor".into(),
+        ));
+    }
+    let embedded_proxy = mode == Mode::Tor && !privoxy;
+    if trace_connections && !embedded_proxy {
+        return Err(Error::Usage(
+            "--trace-connections requires Tor mode with the embedded proxy".into(),
+        ));
+    }
+    if embedded_proxy && allow {
+        return Err(Error::Usage(
+            "embedded proxy requires verified Tor routing; --allow-unverified needs explicit --privoxy".into(),
         ));
     }
     let verify = if allow {
@@ -417,6 +712,9 @@ fn parse_run(s: &mut Scan) -> Result<Command> {
     Ok(Command::Run {
         mode,
         verify,
+        strict,
+        embedded_proxy,
+        trace_connections,
         opencode,
         program,
         args,
@@ -481,8 +779,158 @@ mod tests {
     }
 
     #[test]
+    fn strict_check_is_read_only_command() {
+        assert_eq!(
+            parse(&argv(&["strict", "check"])).unwrap(),
+            Command::StrictCheck
+        );
+        assert!(parse(&argv(&["strict", "apply"])).is_err());
+        assert!(parse(&argv(&["strict", "check", "--yes"])).is_err());
+    }
+
+    #[test]
     fn no_arguments_shows_help() {
         assert_eq!(parse(&[]).unwrap(), Command::Help);
+    }
+
+    #[test]
+    fn gateway_check_and_run_have_explicit_socks_and_ip_guard() {
+        assert_eq!(
+            parse(&argv(&[
+                "gateway",
+                "check",
+                "--socks",
+                "127.0.0.1:1080",
+                "--different-from",
+                "203.0.113.10"
+            ]))
+            .unwrap(),
+            Command::GatewayCheck {
+                socks: "127.0.0.1:1080".into(),
+                different_from: Some("203.0.113.10".parse().unwrap()),
+            }
+        );
+        assert_eq!(
+            parse(&argv(&[
+                "gateway",
+                "run",
+                "--socks",
+                "127.0.0.1:1080",
+                "--opencode",
+                "--",
+                "--version"
+            ]))
+            .unwrap(),
+            Command::GatewayRun {
+                socks: "127.0.0.1:1080".into(),
+                different_from: None,
+                trace_connections: false,
+                opencode: true,
+                program: "opencode".into(),
+                args: vec!["--version".into()],
+            }
+        );
+        assert!(parse(&argv(&["gateway", "check"])).is_err());
+        assert!(parse(&argv(&["gateway", "run", "--socks", "127.0.0.1:1080"])).is_err());
+        assert!(parse(&argv(&[
+            "gateway",
+            "check",
+            "--socks",
+            "127.0.0.1:1080",
+            "--different-from",
+            "bad"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn no_vps_tor_gateway_parses_and_rejects_unknown_options() {
+        assert_eq!(
+            parse(&argv(&["gateway", "tor", "check"])).unwrap(),
+            Command::GatewayTorCheck {
+                different_from: None
+            }
+        );
+        assert_eq!(
+            parse(&argv(&[
+                "gateway",
+                "tor",
+                "run",
+                "--different-from",
+                "192.0.2.19",
+                "--opencode",
+                "--",
+                "--version"
+            ]))
+            .unwrap(),
+            Command::GatewayTorRun {
+                different_from: Some("192.0.2.19".parse().unwrap()),
+                trace_connections: false,
+                opencode: true,
+                program: "opencode".into(),
+                args: vec!["--version".into()],
+            }
+        );
+        assert!(parse(&argv(&["gateway", "tor", "run"])).is_err());
+        assert!(parse(&argv(&[
+            "gateway",
+            "tor",
+            "check",
+            "--socks",
+            "127.0.0.1:9050"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn tracing_only_applies_to_proxy_owned_run_sessions() {
+        assert!(matches!(
+            parse(&argv(&[
+                "gateway", "tor", "run", "--trace-connections", "--opencode", "--", "--standalone"
+            ])).unwrap(),
+            Command::GatewayTorRun { trace_connections: true, args, .. } if args == argv(&["--standalone"])
+        ));
+        assert!(matches!(
+            parse(&argv(&[
+                "gateway",
+                "run",
+                "--socks",
+                "127.0.0.1:9050",
+                "--trace-connections",
+                "--",
+                "curl.exe"
+            ]))
+            .unwrap(),
+            Command::GatewayRun {
+                trace_connections: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&argv(&["run", "--trace-connections", "--opencode"])).unwrap(),
+            Command::Run {
+                trace_connections: true,
+                ..
+            }
+        ));
+        assert!(parse(&argv(&[
+            "run",
+            "--mode",
+            "direct",
+            "--trace-connections",
+            "--",
+            "curl.exe"
+        ]))
+        .is_err());
+        assert!(parse(&argv(&[
+            "run",
+            "--privoxy",
+            "--trace-connections",
+            "--",
+            "curl.exe"
+        ]))
+        .is_err());
+        assert!(parse(&argv(&["gateway", "tor", "check", "--trace-connections"])).is_err());
     }
 
     #[test]
@@ -525,6 +973,9 @@ mod tests {
             Command::Run {
                 mode: Mode::Direct,
                 verify: Verify::Require,
+                strict: false,
+                embedded_proxy: false,
+                trace_connections: false,
                 opencode: false,
                 program: "echo".into(),
                 args: argv(&["--mode", "x y"]),
@@ -539,11 +990,204 @@ mod tests {
     }
 
     #[test]
+    fn tor_run_defaults_to_embedded_and_legacy_is_explicit() {
+        assert!(matches!(
+            parse(&argv(&["run", "--", "curl.exe"])).unwrap(),
+            Command::Run {
+                mode: Mode::Tor,
+                embedded_proxy: true,
+                verify: Verify::Require,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&argv(&["run", "--opencode"])).unwrap(),
+            Command::Run {
+                mode: Mode::Tor,
+                embedded_proxy: true,
+                opencode: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&argv(&["run", "--privoxy", "--", "curl.exe"])).unwrap(),
+            Command::Run {
+                embedded_proxy: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&argv(&["run", "--mode", "direct", "--", "curl.exe"])).unwrap(),
+            Command::Run {
+                mode: Mode::Direct,
+                embedded_proxy: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn backend_flags_and_unverified_mode_do_not_silently_downgrade() {
+        assert!(parse(&argv(&["run", "--privoxy", "--embedded-proxy", "--", "x"])).is_err());
+        assert!(parse(&argv(&["run", "--mode", "direct", "--privoxy", "--", "x"])).is_err());
+        assert!(parse(&argv(&["run", "--allow-unverified", "--", "x"])).is_err());
+        assert!(matches!(
+            parse(&argv(&[
+                "run",
+                "--privoxy",
+                "--allow-unverified",
+                "--",
+                "x"
+            ]))
+            .unwrap(),
+            Command::Run {
+                embedded_proxy: false,
+                verify: Verify::Allow,
+                ..
+            }
+        ));
+        assert!(parse(&argv(&[
+            "run",
+            "--strict",
+            "--allow-unverified",
+            "--privoxy",
+            "--",
+            "x"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn ip_defaults_to_embedded_and_legacy_requires_a_flag() {
+        assert_eq!(
+            parse(&argv(&["ip"])).unwrap(),
+            Command::Ip { privoxy: false }
+        );
+        assert_eq!(
+            parse(&argv(&["ip", "--privoxy"])).unwrap(),
+            Command::Ip { privoxy: true }
+        );
+        assert!(parse(&argv(&["ip", "--privoxy", "extra"])).is_err());
+    }
+
+    #[test]
+    fn rotate_status_is_read_only_and_yes_applies_only_to_rotate() {
+        assert_eq!(
+            parse(&argv(&["rotate", "status"])).unwrap(),
+            Command::RotateStatus
+        );
+        assert!(parse(&argv(&["rotate", "status", "--yes"])).is_err());
+        assert_eq!(
+            parse(&argv(&["rotate", "--yes"])).unwrap(),
+            Command::Rotate { yes: true }
+        );
+    }
+
+    #[test]
+    fn desktop_flags_are_scoped_and_mutations_require_a_target() {
+        assert_eq!(
+            parse(&argv(&["desktop", "serve", "--port", "18119"])).unwrap(),
+            Command::DesktopServe { port: 18119 }
+        );
+        assert_eq!(
+            parse(&argv(&[
+                "desktop",
+                "on",
+                "--target",
+                "powershell",
+                "--port",
+                "8119"
+            ]))
+            .unwrap(),
+            Command::DesktopChange {
+                target: DesktopTarget::PowerShell,
+                enable: true,
+                yes: false,
+                port: 8119,
+            }
+        );
+        assert!(matches!(
+            parse(&argv(&["desktop", "off", "--target", "pwsh", "--yes"])).unwrap(),
+            Command::DesktopChange {
+                target: DesktopTarget::Pwsh,
+                enable: false,
+                yes: true,
+                ..
+            }
+        ));
+        assert!(parse(&argv(&["desktop", "on", "--yes"])).is_err());
+        assert!(parse(&argv(&["desktop", "serve", "--yes"])).is_err());
+        assert!(parse(&argv(&["privacy", "check", "--json"])).is_ok());
+        assert!(parse(&argv(&["privacy", "check", "--unsafe"])).is_err());
+    }
+
+    #[test]
     fn run_rejects_both_verification_flags() {
         assert!(parse(&argv(&[
             "run",
             "--require-tor",
             "--allow-unverified",
+            "--",
+            "x"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn strict_mode_parses_but_requires_tor_without_unverified_override() {
+        assert!(matches!(
+            parse(&argv(&["run", "--strict", "--", "opencode"])).unwrap(),
+            Command::Run {
+                strict: true,
+                mode: Mode::Tor,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&argv(&["run", "--opencode", "--strict"])).unwrap(),
+            Command::Run {
+                strict: true,
+                opencode: true,
+                ..
+            }
+        ));
+        assert!(parse(&argv(&[
+            "run", "--mode", "direct", "--strict", "--", "opencode"
+        ]))
+        .is_err());
+        assert!(parse(&argv(&[
+            "run",
+            "--allow-unverified",
+            "--strict",
+            "--",
+            "opencode"
+        ]))
+        .is_err());
+        assert!(matches!(
+            parse(&argv(&["run", "--", "opencode", "--strict"])).unwrap(),
+            Command::Run { strict: false, ref args, .. } if args == &argv(&["--strict"])
+        ));
+    }
+
+    #[test]
+    fn embedded_proxy_requires_verified_tor_and_preserves_child_args() {
+        assert!(matches!(
+            parse(&argv(&["run", "--embedded-proxy", "--", "opencode", "--standalone"])).unwrap(),
+            Command::Run { embedded_proxy: true, args, .. } if args == argv(&["--standalone"])
+        ));
+        assert!(parse(&argv(&[
+            "run",
+            "--mode",
+            "direct",
+            "--embedded-proxy",
+            "--",
+            "x"
+        ]))
+        .is_err());
+        assert!(parse(&argv(&[
+            "run",
+            "--allow-unverified",
+            "--embedded-proxy",
             "--",
             "x"
         ]))

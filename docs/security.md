@@ -14,7 +14,7 @@ Ratriyx reduces specific risks. It does not make your traffic anonymous. Read th
 | Interop launchers refused in Tor mode | `domain::route::decide`, `infrastructure::opencode::program_is_interop` |
 | Secrets masked in text and JSON output, including Authorization headers | `redact::mask_value`, `redact::redact_text`, `diagnostics::render_*` |
 | Tor cookie never printed; authentication errors show a code only | `tor_control::read_cookie`, `expect_ok` |
-| No unauthenticated control listener; ratriyx never listens | the program opens outbound connections only |
+| Embedded HTTP proxy listens only on loopback; Tor control never exposed by Ratriyx | `embedded_proxy::start_on`, `tor_control` |
 | Privileged actions need `--yes`; the plan type has no stop action | `service::control`, `privoxy::configure_file_for`, `recovery::apply` |
 | Config edits: timestamped backup with mode/uid/gid, atomic write, hash-checked restore | `privoxy`, `fsutil` |
 | Managed setup records owned files/services and rolls back failed verification | `managed`, `maintenance::setup_install` |
@@ -51,12 +51,32 @@ Known gaps: Privoxy `--config-test` is not used as a gate because it exits 0 for
 3. **Exit blocks.** Some sites block Tor exits. A block there is site behavior, not a proxy fault.
 4. **Exit is not your ISP address.** A proxied request shows the Tor exit. An IP difference does not prove routing; `IsTor` is the signal.
 5. **Applications may ignore proxy variables.** Ratriyx sets variables for HTTP(S) clients that read them. Plugins and programs that connect on their own can bypass the route.
-6. **Other protocols are not routed.** Only HTTP(S) through Privoxy is in scope.
+6. **Other protocols are not routed.** The embedded HTTP proxy forwards ordinary HTTP and HTTPS CONNECT through Tor; raw UDP and arbitrary application traffic are not forced onto Tor.
 7. **DNS.** Proxied names are resolved through Tor. Direct requests use the local resolver. A name resolved locally before a connection can leak.
 8. **Running processes keep their environment.** A change in one shell does not reach a process that already started, including an OpenCode server.
 9. **Platforms are separate.** WSL variables reach Windows only through `WSLENV`; native Windows uses its own config paths and process-scoped `$env:` variables. macOS uses Homebrew paths. Untested platforms are labelled, not claimed.
 10. **Enforcement is limited.** Ratriyx verifies and refuses in its own launch path. It cannot force an arbitrary program onto Tor.
-11. **Rate limits are not route problems.** A provider's HTTP 429 is reported as a provider limit. A new Tor exit does not change it, and ratriyx does not cycle identities or retry to get past it.
+11. **Rate limits are not route problems.** A provider's HTTP 429 remains a provider limit. `rotate --yes` can request a Tor NEWNYM for circuit separation, subject to Tor cooldown and without an exit-IP guarantee. It does not retry provider requests or reset account quotas.
+
+**Opt-in connection tracing:** `--trace-connections` on an owned embedded proxy
+records only destination hostname/port and transport outcome during the child
+run window. It does not record HTTP headers, URL paths, authorization tokens,
+request/response bodies or prompts. Hostnames themselves may be private;
+inspect output before copying or posting it. Application-phase counters exclude
+Ratriyx's pre-launch verification probes. Connection metadata cannot prove
+the absence of direct traffic, enforce a firewall or attribute every socket
+to the intended child process.
+
+## v0.4 desktop integration boundary
+
+`ratriyx desktop serve` can run a loopback-only unauthenticated HTTP proxy for
+local applications that have been explicitly configured to use it. Other
+programs on the same computer may also reach that port. Only enable desktop
+integrations when you trust local applications and the Tor SOCKS5 process.
+The proxy must remain running while the current-user WinINet, PowerShell, or
+Zed settings point to it. `desktop off` restores owned settings and refuses
+to overwrite changed third-party configuration. This is not machine-wide
+WinHTTP routing or a firewall, and it cannot protect identity sent to a service.
 12. **Exit codes can be ambiguous.** A child can exit with 2 to 5 or with 128+N. Read the `ratriyx:` prefix on stderr to tell Ratriyx failures apart.
 
 ## Reporting a problem

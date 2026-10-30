@@ -99,17 +99,18 @@ pub fn decide(mode: Mode, verify: Verify, route_verified: bool, interop: bool) -
         (Mode::Tor, _, true, false) => Decision::Launch(Label::Verified),
         (Mode::Tor, Verify::Allow, false, false) => Decision::Launch(Label::Unverified),
         (Mode::Tor, Verify::Require, false, false) => Decision::Refuse(
-            "Tor route not verified (Privoxy or IsTor check failed). Refusing to launch; there is no direct fallback. Run `ratriyx doctor --mode tor`".into(),
+            "Tor route not verified (HTTP proxy or IsTor check failed). Refusing to launch; there is no direct fallback. Run `ratriyx doctor --mode tor`".into(),
         ),
     }
 }
 
 /// Limits that ratriyx cannot change, shown whenever OpenCode is launched.
-pub fn opencode_boundary_notes() -> [&'static str; 3] {
+pub fn opencode_boundary_notes() -> [&'static str; 4] {
     [
         "an OpenCode server started earlier keeps its own environment; restart it to apply this route",
         "Zed and Windows PowerShell are separate processes; set their proxy settings there, not here",
         "plugins that open their own connections may ignore proxy variables",
+        "provider.quota and free-usage limit responses are enforced by the provider; changing routes does not resolve them",
     ]
 }
 

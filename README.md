@@ -1,100 +1,231 @@
 # Ratriyx
 
-Per-process privacy routing through Tor and Privoxy, on Linux (WSL2 and plain Linux), native Windows, and macOS.
+**A native Rust CLI for routing proxy-aware applications through Tor.**
 
-Ratriyx (command: `ratriyx`) does not implement Tor or Privoxy. It checks them, starts a child program with proxy variables set for that child only, and reports what it could and could not verify. Tor (The Onion Router) is an anonymity network that exposes a SOCKS5 proxy (a general-purpose proxy protocol). Privoxy is a local HTTP proxy that forwards to Tor.
+[![Crates.io](https://img.shields.io/crates/v/ratriyx.svg)](https://crates.io/crates/ratriyx)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
-## Installation and first run
+Ratriyx runs on Windows, Linux and macOS. It uses the **C Tor client** and an
+**embedded Rust HTTP-to-SOCKS5 proxy** for ordinary per-process Tor routing.
+Privoxy remains available as an explicit legacy option; ordinary setup and
+diagnostics use the embedded proxy. No Docker or container runtime is needed.
 
-The published version is v0.2.0. The upcoming v0.3.0 development branch adds a Ratatui installer and safer recovery from partial installs.
+**Latest published crate:** [v0.4.1](https://crates.io/crates/ratriyx/0.4.1)
+(October 28, 2026). The repository includes additional unreleased Tor-only
+managed setup and diagnostic improvements. Build from source to use them.
 
-The normal CLI experience is:
+> **Security boundary:** A successful `IsTor=true` check verifies the specific
+> test request. Ratriyx cannot yet guarantee that every connection from an
+> application or its subprocesses uses Tor. The `--strict` flag deliberately
+> refuses to launch until a verified operating-system network guard exists.
+> Account identity, cookies, requests and traffic patterns can still identify you.
+
+## Install
+
+You need Rust **1.88 or newer** to build the CLI. Install the published crate:
+
+```sh
+cargo install ratriyx --locked
+ratriyx --version
+ratriyx doctor
+ratriyx ip
+```
+
+Run `ratriyx` interactively for the consent-based first-run setup. On Windows,
+the repository's installer manages the C Tor bundle without installing Privoxy.
+It waits for bootstrap and verifies the route before treating it as ready.
+On Linux and macOS, Tor installation and service management may require the
+system package manager. The embedded proxy requires a working local Tor SOCKS5
+listener (normally `127.0.0.1:9050`) and does not require Privoxy.
+
+Setup, configuration changes and removal of managed dependencies require
+explicit approval. See [installation.md](installation.md) and
+[Windows managed installation](docs/windows-managed-install.md).
+
+## Quick start: route one application
+
+Choose Tor mode explicitly when launching a program:
+
+```sh
+ratriyx run --mode tor -- opencode --standalone
+```
+
+Ratriyx starts a temporary loopback HTTP proxy, sends its connections to C Tor
+through SOCKS5, verifies a Tor request, and gives the launched application
+`HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`. It stops the temporary listener
+when the command exits. This is **per-process proxy configuration**, not
+OS-enforced traffic isolation. An application or plugin can ignore these
+variables or use other network protocols.
+
+Check the direct address and Tor exit separately:
+
+```sh
+ratriyx ip
+ratriyx privacy check
+```
+
+For comparison with the original external HTTP proxy:
+
+```sh
+ratriyx ip --privoxy
+ratriyx run --mode tor --privoxy -- opencode --standalone
+```
+
+`--allow-unverified` requires an explicit `--privoxy` selection. Prefer the
+verified embedded route. Never treat an unverified route as private.
+
+## Optional Windows desktop integration
+
+The v0.4 desktop proxy is **opt-in**. It is useful for proxy-aware programs
+started from PowerShell or editors. It does not change the Windows firewall or
+enforce routing for unrelated applications.
+
+**Terminal A:** start the native Rust proxy and leave it running:
 
 ```powershell
-cargo install ratriyx
-ratriyx            # Interactive first-run checks and consent-based setup
-ratriyx doctor     # Safe to call directly from any shell/script
-ratriyx ip         # Verifies the Tor exit separately from the direct IP
+ratriyx desktop serve --port 8119
 ```
 
-The bare `ratriyx` command offers to install and configure missing Tor/Privoxy
-**only when run in an interactive terminal**. It previews the actions and
-requires an explicit `y` or `yes` before proceeding. Declining saves a local
-skip marker; `ratriyx setup --install` remains available later. Calls from
-scripts, CI, and `ratriyx --help` never initiate installation. Windows uses
-a pinned Tor bundle and WinGet Privoxy; Linux/macOS still require system
-packages installed separately. A real Windows managed installation successfully reached `IsTor=true` on October 27, 2026; individual Windows environments must still be checked. Setup now displays a six-stage progress bar, Tor download percentage, and WinGet elapsed-time indicators for Privoxy. If Tor exits or times out, the installer preserves a diagnostic log at `%LOCALAPPDATA%\\ratriyx\\state\\setup-tor-stderr.log` rather than hiding the original failure. A Tor SOCKS5 listener is not proof of anonymity; final route verification requires `IsTor=true`.
+**Terminal B:** enable the profile matching the shell you actually use:
 
-## Windows native application routing in v0.3.0
+```powershell
+# Windows PowerShell 5.1
+ratriyx desktop on --target powershell --yes
 
-Native Windows executables and npm command shims (such as curl.exe and opencode.cmd) now inherit Ratriyx's per-process proxy environment without being mistaken for WSL interoperability launchers. Windows executables launched from inside WSL, and Windows launching wsl.exe, are still treated as unverified cross-environment processes. Do not assume that every application, plugin or subprocess honors HTTP_PROXY, HTTPS_PROXY and ALL_PROXY; verify the application's own traffic.
+# PowerShell 7+ (instead of the preceding command)
+ratriyx desktop on --target pwsh --yes
+```
 
-## Upcoming v0.3.0 Windows terminal installer
+Start a **new PowerShell window** and verify:
 
-The Windows managed installer now waits for Tor network bootstrap to reach 100% before making its external IsTor request, with a bounded five-minute bootstrap window and live percentage updates. A ready SOCKS5 listener alone does not mean usable Tor circuits exist. Failed network verification stops only newly started processes and preserves owned Tor data for retry.
+```powershell
+$env:HTTPS_PROXY
+curl.exe -q -sS --max-time 30 https://check.torproject.org/api/ip
+```
 
-The Windows managed installer now uses Ratatui when launched from an interactive terminal. It shows a complete setup pipeline, verified-stage progress bars for Tor, Privoxy and route checks, and a live operation indicator. Curl exposes actual Tor download percentages. WinGet does not provide a reliable percentage for Privoxy installation, so Ratatui shows elapsed-time activity and live installer messages instead of an invented percentage. Existing Privoxy installations, including unknown-version WinGet registrations, are reused rather than upgraded automatically.
+The environment value should be `http://127.0.0.1:8119`, and the response
+should include `"IsTor":true`. Test the exact application separately.
 
-For command scripts, redirected output, or legacy terminals, the installer keeps a normal text-only fallback. Set RATRIYX_NO_TUI=1 to disable Ratatui explicitly, or NO_COLOR=1 to disable colors and fullscreen UI. No install or package upgrade happens without the normal approval flag.
+Other optional targets are `zed` (Zed settings) and `windows` (current-user
+WinINet settings). Each requires `--yes`; the Windows target is **not**
+system-wide WinHTTP routing. Existing programs do not automatically inherit
+new settings. See [desktop integration details](docs/desktop-privacy-v0.4.md).
 
-## What it does
+Windows profile discovery respects redirected Documents folders, including
+OneDrive. A prior Ratriyx-managed block at the older, non-redirected location
+can be migrated with backups. Unrecognized or edited blocks are refused.
+When the foreground proxy is down, the managed PowerShell profile warns but
+still sets proxy variables so clients respecting them do not silently go
+direct. Applications ignoring proxies remain outside this protection.
 
-- `ratriyx doctor` runs layered checks (environment, Tor instance, listeners, forwarding, direct request, proxied request, `IsTor`, OpenCode resolution) and reports `PASS`, `WARN`, `FAIL`, or `NOT_TESTED` with the next step.
-- `ratriyx ip` reports the direct address, the proxied exit, and the Tor verification signal separately.
-- `ratriyx run -- <program>` starts a program with proxy variables for that child only. Tor mode verifies the route first and never falls back to direct.
-- `ratriyx env` and `ratriyx off` print shell code for you to evaluate, with a snapshot of prior values.
-- `ratriyx recover` previews a repair plan. It starts services only with `--apply --yes`.
-- `ratriyx configure`, `restore`, `service`, `rotate`, `uninstall`, and `config migrate` are guarded: each privileged action needs `--yes`, and each keeps a backup or refuses.
-- `ratriyx setup --install --yes` performs managed setup: appends the Privoxy rule with a backup, starts missing services, records ownership, verifies the route, and rolls back on failure. Missing Tor/Privoxy/curl stop with manual install steps.
-- `ratriyx uninstall` asks separately whether to remove Ratriyx settings, the Ratriyx-owned Tor bundle, and Ratriyx-installed Privoxy. Each defaults to No; external dependencies are **never removed implicitly**. `ratriyx uninstall --yes` removes only settings; `ratriyx uninstall --yes --remove-tor --remove-privoxy` is an explicit scripted clean reset. Only dependencies recorded as installed by Ratriyx are eligible.
-- `ratriyx uninstall --remove-managed --yes` is the legacy managed-file restore command, which refuses to discard dependency ownership metadata while managed dependencies remain. The CLI executable is managed separately by `cargo uninstall ratriyx`.
-- Recovery for orphaned Privoxy packages: the interactive uninstall shows a separate, default-No prompt when WinGet has the exact package but Ratriyx has lost its ownership record. For scripts, use `ratriyx uninstall --yes --remove-untracked-privoxy`. This never stops a running untracked Privoxy process, never edits an unowned configuration, and does nothing without explicit approval.
-- Interactive terminal output uses grouped, color-coded doctor results and overall install progress. Redirected diagnostic output and `doctor --json` stay stable and uncolored; set `NO_COLOR=1` to disable ANSI colors.
+**Restore settings before stopping Terminal A:**
 
-## What it does not do
+```powershell
+ratriyx desktop off --target powershell --yes
+# Or use --target pwsh, zed, or windows, for each target you enabled.
+```
 
-- It does not make traffic anonymous. Account logins, timing, and destinations still identify you.
-- It does not change system-wide proxy settings, PowerShell profiles, or Zed settings. Running applications keep the environment they started with.
-- It does not stop unrelated services, kill processes by port, or retry rate-limited providers.
-- It does not change IP addresses to get around a provider's rate limit. A provider 429 is reported as a provider limit.
-- It does not claim a platform is supported until it passes acceptance tests there. See the platform table below.
+Restoration is guarded: Ratriyx refuses to overwrite unexpected changes in
+settings it does not own.
 
-## Platform support
+## Command reference
 
-| Platform | Status |
+| Command | Purpose |
 |---|---|
-| Ubuntu on WSL2 | Tested target. |
-| Plain Linux (systemd) | Implemented; acceptance NOT VERIFIED on a plain-Linux machine. |
-| Native Windows (PowerShell) | Managed Tor + Privoxy install and `IsTor=true` verified on a Windows machine (2026-10-27); wider Windows compatibility and scripts not fully validated. |
-| macOS (Homebrew) | Implemented; runtime NOT VERIFIED on macOS. |
-| Other operating systems | Refused, exit 3. |
+| `ratriyx doctor [--json]` | Diagnose Tor SOCKS5, embedded forwarding and platform readiness |
+| `ratriyx ip [--privoxy]` | Compare direct IP, Tor exit and verified `IsTor` status |
+| `ratriyx gateway check --socks 127.0.0.1:1080` | Verify a separately operated SOCKS5 gateway has a different public IP |
+| `ratriyx gateway run --socks 127.0.0.1:1080 -- PROGRAM` | Run a proxy-aware child only after gateway IP verification |
+| `ratriyx gateway tor check` | Start a disposable second Tor client locally and verify a distinct exit, no VPS (Windows) |
+| `ratriyx gateway tor run --opencode -- --standalone` | Run OpenCode using that separately verified Tor client |
+| `ratriyx gateway tor run --trace-connections --opencode -- --standalone` | Diagnose OpenCode proxy CONNECT destinations and SOCKS outcomes (opt-in metadata only) |
+| `ratriyx privacy check [--json]` | Report verified routing evidence and remaining privacy risks |
+| `ratriyx run --mode tor -- PROGRAM` | Run a proxy-aware application through the embedded frontend |
+| `ratriyx desktop serve --port 8119` | Start a foreground loopback HTTP proxy |
+| `ratriyx desktop on\|off --target TARGET --yes` | Opt-in per-user integration and restoration |
+| `ratriyx rotate status` | Inspect Tor control availability and local NEWNYM cooldown |
+| `ratriyx rotate --yes` | Request future circuit separation, if Tor control is configured |
+| `ratriyx strict check` | Read-only Windows enforcement prerequisite check, not active protection |
+| `ratriyx setup --install --yes` | Approved managed dependency installation |
+| `ratriyx recover` | Preview recovery actions before choosing `--apply --yes` |
+| `ratriyx uninstall` | Interactive, ownership-aware settings and dependency removal |
 
-## Quick start (WSL)
+Run `ratriyx --help` for the complete command and option list.
 
-```bash
-cd apps
-cargo build --release
-./target/release/ratriyx doctor --mode tor
-./target/release/ratriyx run --mode tor -- opencode
+For a third public egress IP, run an SSH dynamic SOCKS5 tunnel through a VPS
+you control, then use `ratriyx gateway check` or `gateway run`. Ratriyx
+requires the gateway to differ from the direct public IP and supports
+`--different-from IP` to refuse a known previous exit as well. See
+[alternate gateway guide](docs/alternate-gateway.md).
+**No VPS needed on Windows:** `ratriyx gateway tor check` starts a separate,
+temporary Tor process using your already-installed Tor executable, compares
+it against the direct IP and existing Tor exit, and stops it after checking.
+`ratriyx gateway tor run --opencode -- --standalone` keeps it running until
+OpenCode exits. It verifies the probe IP at launch, not a permanent static
+IP for every later connection. This does not reset
+OpenCode provider limits or provide OS-wide network isolation.
+
+To inspect the **application** network path, add `--trace-connections` before
+`--opencode`, and use OpenCode's `--standalone` flag to avoid reusing an existing
+server. Traces begin only after Ratriyx's own Tor verification is finished;
+they include destination hostname, port and SOCKS/CONNECT outcome, but no
+authorization headers, prompt or response bodies. An empty trace does **not**
+prove a direct connection: the application may simply have made no request.
+Interactive OpenCode displays connection details only **after it exits**, so
+diagnostic output cannot overwrite its full-screen terminal interface.
+See [alternate gateway diagnostics](docs/alternate-gateway.md).
+
+## What Ratriyx does not guarantee
+
+- **No active strict firewall:** `run --strict` refuses to start applications
+  instead of silently falling back to a weaker route. Windows WFP and Job
+  Object readiness checks do not install a production network guard.
+- **No blanket application isolation:** Raw TCP, UDP/QUIC, IPv6, direct DNS,
+  background servers and subprocesses may bypass an environment proxy.
+- **No anonymity guarantee:** Logins, tokens, cookies, content, fingerprints
+  and timing can link requests regardless of Tor exit IP.
+- **No provider quota bypass:** HTTP 429 is a provider-side rate limit.
+  `NEWNYM` does not reset account quotas or guarantee a different exit.
+- **No traffic interception:** A Windows desktop proxy setting affects
+  applications that honor it. It does not secure other software automatically.
+
+The full threat model is in [security.md](docs/security.md) and
+[strict-routing-v0.4.md](docs/strict-routing-v0.4.md).
+
+## Platform verification
+
+| Platform | Evidence and current boundary |
+|---|---|
+| Native Windows | Managed Tor restart and embedded-proxy `IsTor=true` verified on a Windows machine, along with OpenCode version launches in Tor and direct mode. A clean Tor-only installation and real-user desktop-settings migration still need systematic live regression coverage. |
+| Ubuntu on WSL2 | Tested development target. Windows executables invoked across WSL remain a separate, unverified boundary. |
+| Plain Linux | Code paths implemented; end-to-end platform acceptance remains incomplete. |
+| macOS | Code paths implemented; end-to-end macOS runtime acceptance remains incomplete. |
+
+## Development
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo build --release --locked
 ```
 
-See [installation.md](installation.md) for the full setup and [troubleshooting.md](troubleshooting.md) for failures.
+Live network tests require explicit local opt-in and running Tor services.
+The regular test suite does not imply all platform or privacy acceptance tests
+have passed.
 
-## Documents
+## Documentation and next steps
 
-- [installation.md](installation.md): install and first run (WSL2, plain Linux, Windows, macOS).
-- [scripts/windows/](scripts/windows/): `Start-Proxy.ps1`, `Stop-Proxy.ps1`, `Status-Proxy.ps1`, `Rotate-Tor.ps1` (PowerShell 5.1; runtime NOT VERIFIED).
-- [troubleshooting.md](troubleshooting.md): pointer to the detailed guide.
-- [docs/architecture.md](docs/architecture.md): design, diagram, and platform support table.
-- [docs/security.md](docs/security.md): enforced controls, limits, and the latest audit.
-- [docs/proxy-recovery.md](docs/proxy-recovery.md): recovery workflow and error classes.
-- [docs/troubleshooting.md](docs/troubleshooting.md): detailed symptom-to-cause guide.
-- [CHANGELOG.md](CHANGELOG.md): what changed in each release.
-
-## Status
-
-Version 0.2.0 is the published release. Version 0.3.0 is under development. It builds and passes formatting, clippy with warnings denied, and the test suite in Ubuntu under WSL2. Live checks that were run, and the ones not run, are recorded in `../workspaces/doc/tasks.md`.
+- [What's next](docs/NEXT_STEPS.md): prioritized work, release criteria and test gates.
+- [Architecture](docs/architecture.md): components and data flow.
+- [Embedded proxy](docs/embedded-proxy-v0.4.md): HTTP/CONNECT behavior and limits.
+- [Desktop integration](docs/desktop-privacy-v0.4.md): configuration and safe restoration.
+- [Strict routing threat model](docs/strict-routing-v0.4.md): why strict mode refuses.
+- [Security guide](docs/security.md): protections, caveats and reporting.
+- [Troubleshooting](docs/troubleshooting.md): diagnosis and error recovery.
+- [Changelog](CHANGELOG.md): release history.
 
 ## License
 
-Dual-licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Dual-licensed under [MIT](LICENSE-MIT) or
+[Apache-2.0](LICENSE-APACHE), at your option.

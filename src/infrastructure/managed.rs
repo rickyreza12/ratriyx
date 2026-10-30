@@ -263,6 +263,7 @@ pub fn forget_dependency(dir: &Path, name: &str, created_file: &Path) -> Result<
 }
 
 /// Records a service Ratriyx started. Never records a service it did not start.
+#[cfg(test)]
 pub fn record_service(dir: &Path, unit: &str) -> Result<()> {
     update(dir, |rec| {
         if !rec.services.iter().any(|s| s == unit) {

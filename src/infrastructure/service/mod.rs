@@ -2,7 +2,7 @@ mod sockets;
 mod systemd;
 
 pub use sockets::listening;
-pub use systemd::{control, tor_bootstrap_percent, tor_state, unit_active};
+pub use systemd::{control, tor_bootstrap_percent, tor_state};
 
 use crate::domain::error::{Error, Result};
 

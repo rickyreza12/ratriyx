@@ -1,6 +1,5 @@
 use crate::infrastructure::opencode::find_on_path;
 use crate::infrastructure::platform;
-use crate::infrastructure::privoxy::{self, FwState};
 use crate::infrastructure::service;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -11,10 +10,8 @@ pub struct SetupFacts {
     pub support: String,
     pub systemd: bool,
     pub tor_installed: bool,
-    pub privoxy_installed: bool,
     pub curl_installed: bool,
     pub package_manager: Option<&'static str>,
-    pub forwarding: String,
     pub tor_state: String,
 }
 
@@ -28,17 +25,17 @@ fn detect_package_manager(path_var: &OsStr) -> Option<&'static str> {
 pub fn gather(path_var: &OsStr, cfg: &crate::infrastructure::config::Config) -> SetupFacts {
     let platform = platform::detect();
     let systemd = platform.systemd;
-    let privoxy_path = std::path::Path::new(&cfg.privoxy_config);
-    let forwarding = match privoxy::read_effective_for(privoxy_path, &cfg.desired_rule()) {
-        FwState::Present => "desired rule present".to_string(),
-        FwState::Absent => "desired rule absent".to_string(),
-        FwState::Conflicting(_) => "conflicting rules present".to_string(),
-        FwState::Unreadable(msg) => format!("unreadable ({msg})"),
-    };
-    let tor_state = match service::tor_state() {
-        Some(s) if s.instance_running => format!("{} running ({})", s.unit, s.master_state),
-        Some(s) => format!("{} not running ({})", s.unit, s.master_state),
-        None => "unknown (service manager unavailable)".to_string(),
+    let tor_state = if cfg!(windows) {
+        match crate::infrastructure::network::socks5_greeting(&cfg.tor_socks_addr()) {
+            Ok(()) => "SOCKS5 listener responding".to_string(),
+            Err(reason) => format!("SOCKS5 unavailable ({reason})"),
+        }
+    } else {
+        match service::tor_state() {
+            Some(s) if s.instance_running => format!("{} running ({})", s.unit, s.master_state),
+            Some(s) => format!("{} not running ({})", s.unit, s.master_state),
+            None => "unknown (service manager unavailable)".to_string(),
+        }
     };
     SetupFacts {
         platform: platform.describe(),
@@ -57,24 +54,13 @@ pub fn gather(path_var: &OsStr, cfg: &crate::infrastructure::config::Config) -> 
                 false
             }
         },
-        privoxy_installed: find_on_path("privoxy", path_var).is_some() || {
-            #[cfg(windows)]
-            {
-                crate::infrastructure::winmanaged::find_privoxy_exe(path_var).is_some()
-            }
-            #[cfg(not(windows))]
-            {
-                false
-            }
-        },
         curl_installed: find_on_path(platform::curl_program(), path_var).is_some(),
         package_manager: detect_package_manager(path_var),
-        forwarding,
         tor_state,
     }
 }
 
-/// Read-only preview. Ratriyx never installs packages; it prints the commands for you to review.
+/// Read-only preview of Tor setup. Privoxy remains available only for legacy removal.
 pub fn report(facts: &SetupFacts) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "ratriyx setup (dry run; no changes made)");
@@ -85,44 +71,39 @@ pub fn report(facts: &SetupFacts) -> String {
     let _ = writeln!(out, "curl installed:  {}", yes_no(facts.curl_installed));
     let _ = writeln!(
         out,
-        "privoxy installed: {}",
-        yes_no(facts.privoxy_installed)
-    );
-    let _ = writeln!(
-        out,
         "package manager: {}",
         facts.package_manager.unwrap_or("none found")
     );
-    let _ = writeln!(out, "privoxy forwarding: {}", facts.forwarding);
-    let _ = writeln!(out, "tor instance:    {}", facts.tor_state);
-    let _ = writeln!(out, "proposed steps (each needs your separate approval):");
-    if !facts.tor_installed || !facts.privoxy_installed {
-        let pm = facts.package_manager.unwrap_or("your package manager");
-        let _ = writeln!(
-            out,
-            "  1. install missing packages yourself, for example: sudo {pm} install tor privoxy"
-        );
+    let _ = writeln!(out, "tor network:     {}", facts.tor_state);
+    let _ = writeln!(
+        out,
+        "proxy backend:   embedded Rust HTTP proxy (temporary loopback port)"
+    );
+    let _ = writeln!(out, "proposed steps:");
+    if !facts.tor_installed {
+        if facts.platform.to_ascii_lowercase().contains("windows") {
+            let _ = writeln!(out, "  1. download managed Tor after setup --install --yes");
+        } else {
+            let pm = facts.package_manager.unwrap_or("your package manager");
+            let _ = writeln!(
+                out,
+                "  1. install missing Tor, for example: sudo {pm} install tor"
+            );
+        }
     } else {
-        let _ = writeln!(out, "  1. packages present; nothing to install");
-    }
-    if facts.forwarding == "desired rule present" {
-        let _ = writeln!(out, "  2. forwarding already present; nothing to configure");
-    } else {
-        let _ = writeln!(
-            out,
-            "  2. configure forwarding: ratriyx configure --dry-run, then ratriyx configure --yes"
-        );
+        let _ = writeln!(out, "  1. Tor installed; nothing to download");
     }
     if facts.tor_state.contains("not running") {
-        let _ = writeln!(out, "  3. start Tor: ratriyx service start tor --yes");
+        let _ = writeln!(out, "  2. start Tor: ratriyx setup --install --yes");
     } else if facts.tor_state.contains("running") {
-        let _ = writeln!(out, "  3. Tor already running; nothing to start");
+        let _ = writeln!(out, "  2. Tor already running; nothing to start");
     } else {
         let _ = writeln!(
             out,
-            "  3. Tor service state unknown; verify with ratriyx doctor"
+            "  2. inspect Tor readiness with ratriyx doctor --mode tor"
         );
     }
+    let _ = writeln!(out, "  3. verify IsTor through an embedded HTTP proxy");
     let _ = writeln!(out, "nothing above runs without your explicit approval");
     out
 }
@@ -139,16 +120,14 @@ fn yes_no(value: bool) -> &'static str {
 mod tests {
     use super::*;
 
-    fn facts(installed: bool, forwarding: &str, tor: &str) -> SetupFacts {
+    fn facts(installed: bool, _forwarding: &str, tor: &str) -> SetupFacts {
         SetupFacts {
             platform: "linux (WSL2), ubuntu".into(),
             support: "supported (tested target)".into(),
             systemd: true,
             tor_installed: installed,
-            privoxy_installed: installed,
             curl_installed: installed,
             package_manager: Some("apt-get"),
-            forwarding: forwarding.into(),
             tor_state: tor.into(),
         }
     }
@@ -162,7 +141,7 @@ mod tests {
         ));
         assert!(text.contains("no changes made"));
         assert!(text.contains("nothing above runs without your explicit approval"));
-        assert!(text.contains("nothing to install"));
+        assert!(text.contains("nothing to download"));
     }
 
     #[test]
@@ -172,7 +151,7 @@ mod tests {
             "desired rule present",
             "unknown (service manager unavailable)",
         ));
-        assert!(output.contains("Tor service state unknown"));
+        assert!(output.contains("inspect Tor readiness"));
         assert!(!output.contains("Tor already running"));
     }
 
@@ -183,7 +162,8 @@ mod tests {
             "desired rule absent",
             "tor@default not running (inactive/dead)",
         ));
-        assert!(text.contains("sudo apt-get install tor privoxy"));
-        assert!(text.contains("ratriyx service start tor --yes"));
+        assert!(text.contains("sudo apt-get install tor"));
+        assert!(!text.contains("install tor privoxy"));
+        assert!(text.contains("ratriyx setup --install --yes"));
     }
 }

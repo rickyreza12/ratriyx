@@ -1,13 +1,14 @@
 use crate::domain::route::{Mode, PROXY_VARS};
 use crate::infrastructure::config::Config;
+use crate::infrastructure::embedded_proxy::EmbeddedProxy;
 use crate::infrastructure::network::{self, NetError, Response, Route};
 use crate::infrastructure::opencode;
-use crate::infrastructure::privoxy::{self, FwState};
 use crate::infrastructure::redact;
 use crate::infrastructure::service::{self, TorState};
 use std::env;
 use std::ffi::OsString;
 use std::fmt::Write as _;
+#[cfg(test)]
 use std::path::Path;
 
 pub const DIRECT_URL: &str = "https://api.ipify.org";
@@ -297,47 +298,7 @@ pub fn eval_socks(result: &std::result::Result<(), String>, addr: &str, mode: Mo
     }
 }
 
-pub fn eval_forwarding(state: &FwState, mode: Mode) -> Check {
-    let id = "privoxy.forwarding";
-    match state {
-        FwState::Present => check(
-            id,
-            "forwarding",
-            Status::Pass,
-            "forward-socks5t rule present",
-            None,
-        ),
-        FwState::Absent => check(
-            id,
-            "forwarding",
-            tor_failure(mode),
-            "forward-socks5t rule missing",
-            Some("ratriyx configure --dry-run, then ratriyx configure --yes"),
-        ),
-        FwState::Conflicting(rules) => {
-            let lines = rules
-                .iter()
-                .map(|r| r.line.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            check(
-                id,
-                "forwarding",
-                tor_failure(mode),
-                &format!("rules at lines {lines} route destinations directly or catch all traffic"),
-                Some("review those lines by hand; ratriyx will not edit them"),
-            )
-        }
-        FwState::Unreadable(msg) => check(
-            id,
-            "forwarding",
-            tor_failure(mode),
-            &format!("Privoxy config unreadable ({msg})"),
-            Some("check the path and permissions"),
-        ),
-    }
-}
-
+#[cfg(test)]
 fn windows_missing_proxy_config(path: &Path, mode: Mode) -> Check {
     check(
         "privoxy.forwarding",
@@ -530,13 +491,26 @@ pub fn verify_route(cfg: &Config) -> Option<String> {
     verify_route_with_timeout(cfg, 30)
 }
 
+/// Verify the same proxied request used at launch and return the Tor exit IP,
+/// when the Tor Project response supplies a syntactically valid address.
+pub fn verify_tor_exit_ip(
+    cfg: &Config,
+    timeout_secs: u64,
+) -> std::result::Result<Option<String>, String> {
+    let response = network::fetch(&Route::Proxy(cfg.proxy_url()), VERIFY_URL, timeout_secs);
+    if let Some(failure) = verification_failure(&response.outcome) {
+        return Err(failure);
+    }
+    let exit = response
+        .outcome
+        .ok()
+        .and_then(|value| extract_json_string(&value.body, "IP"));
+    Ok(exit.filter(|value| value.parse::<std::net::IpAddr>().is_ok()))
+}
+
 pub fn verify_route_with_timeout(cfg: &Config, timeout_secs: u64) -> Option<String> {
     let probe = network::fetch(&Route::Proxy(cfg.proxy_url()), VERIFY_URL, timeout_secs);
     verification_failure(&probe.outcome)
-}
-
-pub fn route_verified_with_timeout(cfg: &Config, timeout_secs: u64) -> bool {
-    verify_route_with_timeout(cfg, timeout_secs).is_none()
 }
 
 fn masked_proxy_vars() -> Vec<(String, String)> {
@@ -581,22 +555,36 @@ pub fn run_doctor(cfg: &Config, mode: Mode, app: Option<&str>) -> Vec<Check> {
         &socks_addr,
         mode,
     ));
-    checks.push(eval_listener(cfg.proxy_port, listeners, mode, "privoxy"));
-    let desired = cfg.desired_rule();
-    let config_path = Path::new(&cfg.privoxy_config);
-    if cfg!(windows) && !config_path.exists() {
-        checks.push(windows_missing_proxy_config(config_path, mode));
-    } else {
-        checks.push(eval_forwarding(
-            &privoxy::read_effective_for(config_path, &desired),
-            mode,
-        ));
-    }
-
     let direct = network::fetch(&Route::Direct, DIRECT_URL, 15);
     checks.push(eval_direct(&direct.outcome, mode).timed(direct.elapsed_ms));
-    let proxied = network::fetch(&Route::Proxy(cfg.proxy_url()), VERIFY_URL, 30);
-    checks.push(eval_istor(&proxied.outcome, &cfg.proxy_url(), mode).timed(proxied.elapsed_ms));
+    if mode == Mode::Tor {
+        let result = cfg
+            .tor_socks_addr()
+            .parse()
+            .map_err(|_| "invalid Tor SOCKS5 socket address".to_string())
+            .and_then(|addr| EmbeddedProxy::start(addr).map_err(|e| e.to_string()));
+        match result {
+            Ok(proxy) => {
+                let url = format!("http://{}", proxy.address());
+                checks.push(check(
+                    "proxy.embedded",
+                    "proxy",
+                    Status::Pass,
+                    &format!("temporary embedded HTTP proxy bound at {}", proxy.address()),
+                    None,
+                ));
+                let proxied = network::fetch(&Route::Proxy(url.clone()), VERIFY_URL, 30);
+                checks.push(eval_istor(&proxied.outcome, &url, mode).timed(proxied.elapsed_ms));
+            }
+            Err(reason) => checks.push(check(
+                "proxy.embedded",
+                "proxy",
+                Status::Fail,
+                &format!("embedded proxy could not start: {reason}"),
+                None,
+            )),
+        }
+    }
 
     match app {
         Some("opencode") => {
@@ -748,37 +736,23 @@ pub fn run_ip(cfg: &Config) -> Vec<String> {
 
 pub fn run_status(cfg: &Config) -> Vec<String> {
     let mut lines = vec![
-        format!("proxy endpoint:   {}", cfg.proxy_url()),
+        format!("tor socks:        {}", cfg.tor_socks_addr()),
         format!(
-            "tor socks:        {}:{}",
-            cfg.tor_socks_host, cfg.tor_socks_port
+            "tor SOCKS5:       {}",
+            match network::socks5_greeting(&cfg.tor_socks_addr()) {
+                Ok(()) => "ready".to_string(),
+                Err(reason) => format!("unavailable ({reason})"),
+            }
         ),
         format!(
             "tor control:      {}",
             if cfg.tor_control_enabled {
-                "enabled (cookie auth)"
+                "enabled"
             } else {
                 "disabled"
             }
         ),
-        format!("privoxy config:   {}", cfg.privoxy_config),
     ];
-    lines.push(match service::tor_state() {
-        Some(s) if s.instance_running => {
-            format!("{}:      running (master {})", s.unit, s.master_state)
-        }
-        Some(s) => format!("{}:      not running (master {})", s.unit, s.master_state),
-        None => "tor:      unknown (service manager unavailable)".into(),
-    });
-    lines.push(match service::unit_active(service::PRIVOXY) {
-        Some(true) => "privoxy:          active".into(),
-        Some(false) => "privoxy:          not active".into(),
-        None => "privoxy:          unknown".into(),
-    });
-    lines.push(format!(
-        "privoxy forwarding: {:?}",
-        privoxy::read_effective_for(Path::new(&cfg.privoxy_config), &cfg.desired_rule())
-    ));
     let vars = masked_proxy_vars();
     if vars.is_empty() {
         lines.push("process env:      no proxy variables (this ratriyx process only)".into());
@@ -787,14 +761,35 @@ pub fn run_status(cfg: &Config) -> Vec<String> {
             lines.push(format!("process env:      {name}={value}"));
         }
     }
-    lines.push(format!(
-        "route:            {}",
-        if route_verified_with_timeout(cfg, 5) {
-            "verified (IsTor true)"
-        } else {
-            "not verified"
+    match cfg.tor_socks_addr().parse() {
+        Ok(addr) => match EmbeddedProxy::start(addr) {
+            Ok(proxy) => {
+                let mut probe_cfg = cfg.clone();
+                probe_cfg.proxy_host = proxy.address().ip().to_string();
+                probe_cfg.proxy_port = proxy.address().port();
+                lines.push(format!("embedded proxy:   ready at {}", proxy.address()));
+                let ip = run_ip(&probe_cfg);
+                let verified = ip_verified(&ip);
+                lines.extend(ip);
+                lines.push(format!(
+                    "route:            {}",
+                    if verified {
+                        "verified (IsTor true)"
+                    } else {
+                        "not verified"
+                    }
+                ));
+            }
+            Err(e) => {
+                lines.push(format!("embedded proxy:   unavailable ({e})"));
+                lines.push("route:            not verified".into());
+            }
+        },
+        Err(_) => {
+            lines.push("embedded proxy:   invalid Tor SOCKS5 address".into());
+            lines.push("route:            not verified".into());
         }
-    ));
+    }
     lines.push(
         "scope:            per process here; the current shell is not changed by this command"
             .into(),
@@ -970,6 +965,20 @@ mod tests {
         assert!(verification_failure(&Err(NetError::Refused))
             .unwrap()
             .contains("connection refused"));
+    }
+
+    #[test]
+    fn exit_ip_requires_a_verified_tor_response() {
+        let valid = ok(200, "{\"IsTor\":true,\"IP\":\"203.0.113.9\"}").unwrap();
+        assert!(verification_failure(&Ok(valid.clone())).is_none());
+        assert_eq!(
+            extract_json_string(&valid.body, "IP").as_deref(),
+            Some("203.0.113.9")
+        );
+        assert!(
+            verification_failure(&ok(200, "{\"IsTor\":false,\"IP\":\"203.0.113.9\"}")).is_some()
+        );
+        assert!(verification_failure(&ok(403, "{\"IsTor\":true}")).is_some());
     }
 
     #[test]

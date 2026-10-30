@@ -1,8 +1,12 @@
+mod desktop;
 mod diagnose;
+mod gateway;
 mod launch;
 mod maintenance;
 mod onboarding;
+mod privacy;
 mod proxy;
+mod strict;
 mod uninstall;
 
 use crate::domain::error::Result;
@@ -21,15 +25,72 @@ pub fn dispatch(command: Command) -> Result<i32> {
     let cfg = load_config()?;
     match command {
         Command::Doctor { json, mode, app } => diagnose::doctor(&cfg, json, mode, app.as_deref()),
-        Command::Ip => diagnose::ip(&cfg),
-        Command::Status => diagnose::status(&cfg),
-        Command::Run {
-            mode,
-            verify,
+        Command::Ip { privoxy } => diagnose::ip(&cfg, privoxy),
+        Command::GatewayCheck {
+            socks,
+            different_from,
+        } => gateway::check(&socks, different_from),
+        Command::GatewayRun {
+            socks,
+            different_from,
+            trace_connections,
             opencode,
             program,
             args,
-        } => launch::run(&cfg, mode, verify, opencode, &program, &args),
+        } => gateway::run(
+            &socks,
+            different_from,
+            trace_connections,
+            opencode,
+            &program,
+            &args,
+        ),
+        Command::GatewayTorCheck { different_from } => gateway::tor_check(&cfg, different_from),
+        Command::GatewayTorRun {
+            different_from,
+            trace_connections,
+            opencode,
+            program,
+            args,
+        } => gateway::tor_run(
+            &cfg,
+            different_from,
+            trace_connections,
+            opencode,
+            &program,
+            &args,
+        ),
+        Command::Status => diagnose::status(&cfg),
+        Command::PrivacyCheck { json } => privacy::check(&cfg, json),
+        Command::DesktopServe { port } => desktop::serve(&cfg, port),
+        Command::DesktopChange {
+            target,
+            enable,
+            yes,
+            port,
+        } => desktop::change(&cfg, target, enable, yes, port),
+        Command::Run {
+            mode,
+            verify,
+            strict,
+            embedded_proxy,
+            trace_connections,
+            opencode,
+            program,
+            args,
+        } => launch::run(
+            &cfg,
+            launch::RunOptions {
+                mode,
+                verify,
+                strict,
+                embedded_proxy,
+                trace_connections,
+                opencode,
+                program: &program,
+                args: &args,
+            },
+        ),
         Command::Env {
             shell,
             mode,
@@ -70,6 +131,8 @@ pub fn dispatch(command: Command) -> Result<i32> {
             }
         }
         Command::Rotate { yes } => diagnose::rotate(&cfg, yes),
+        Command::RotateStatus => diagnose::rotate_status(&cfg),
+        Command::StrictCheck => strict::check(),
         Command::ConfigMigrate { yes } => maintenance::config_migrate(yes),
         Command::Help | Command::Version => Ok(0),
     }

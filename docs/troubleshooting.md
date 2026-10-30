@@ -1,103 +1,53 @@
-# Troubleshooting (detailed)
+# Troubleshooting Ratriyx
 
-Use the observation, not the guess. Run `ratriyx doctor --mode tor --json` to get the raw check list.
+Run these read-only commands on the machine where routing is failing:
 
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| 0 | Success. For `run`, the child's own code is passed through. |
-| 1 | A check or operation failed. Nothing was launched. |
-| 2 | Usage or config error. |
-| 3 | Unsupported platform (unknown operating system). |
-| 4 | Tor mode refused to launch because the route is not verified, or an interop launcher was refused. |
-| 5 | An action needs `--yes` after review. Nothing changed. |
-| 70 | Ratriyx lost track of a running child. The message starts with `ratriyx:`. |
-| 128+N | The child stopped on signal N. |
-
-When `run` exits with a code, a code from 2 to 5 can also come from the child itself. Read the `ratriyx:` prefix on stderr to tell them apart.
-
-## Symptoms
-
-### `FAIL tor.instance: Tor instance not running`
-
-Tor is stopped, or only the master `tor` unit is active. `tor` can show `active (exited)` while the instance is down. Ratriyx checks `tor@default` first, then plain `tor`.
-
-```bash
-systemctl status tor@default
-sudo systemctl start tor@default        # or: ratriyx service start tor --yes
+```powershell
+ratriyx status
+ratriyx ip
+ratriyx doctor --mode tor --app opencode
 ```
 
-```bash
-systemctl status tor@default
-sudo systemctl start tor@default        # or: ratriyx service start tor --yes
-```
+Use `ratriyx doctor --mode tor --json` for a structured report. Tokens and URL credentials are redacted, but review diagnostics before sharing.
 
-### `FAIL listener.8118` or `listener.9050`: nothing listening
+## Tor SOCKS5 listener unavailable
 
-The service that should own the port is not running. Start it, or check its configuration. Ratriyx does not kill a process by its port number.
+A Tor SOCKS5 handshake to the configured loopback port (default 9050) failed. On Windows, run `ratriyx setup --dry-run` to inspect whether managed Tor is installed. `ratriyx run --opencode --mode tor` can automatically start an already installed and owned managed Tor process. To approve the first installation, review `ratriyx setup --install`, then run `ratriyx setup --install --yes`.
 
-### `FAIL privoxy.forwarding: rule missing`
+On Linux check the Tor instance with the service manager. The systemd master service showing active does not prove Tor SOCKS5 is ready.
 
-Privoxy does not forward to Tor. Preview, then apply with approval:
+## Embedded proxy cannot start
 
-```bash
-ratriyx configure --dry-run
-sudo ratriyx configure --yes
-```
+The Rust proxy binds to a temporary loopback port. An error can indicate a local socket bind failure or a configured Tor SOCKS5 address error. No externally managed HTTP proxy on port 8118 is required.
 
-### `FAIL privoxy.forwarding: rules at lines ... route destinations directly`
+## IsTor=false, timeouts or connection failures
 
-A rule sends traffic direct, or catches all traffic outside Tor. Ratriyx refuses to change it, because the right fix depends on your setup. Edit those lines by hand, then re-run `ratriyx doctor`.
+Tor SOCKS5 can answer before its circuits finish building. Wait for Tor bootstrap, inspect the Tor diagnostic log, and run `ratriyx ip` again. The request to `https://check.torproject.org/api/ip` must report `IsTor=true` through the actual embedded proxy. Tor-required child launch refuses to proceed when that verification fails. A different direct IP is not sufficient proof of Tor routing.
 
-### `FAIL tor.istor: connection refused`
+## OpenCode cannot be found or reports a local server
 
-Privoxy is not listening on the proxy port. Check `listener.8118` and `systemctl status privoxy`.
+Run `ratriyx doctor --mode tor --app opencode`. OpenCode should resolve to an executable on PATH. Windows npm command shims are supported; WSL interop paths require special care. An OpenCode background server started before route selection keeps its original network environment until restarted.
 
-### `FAIL tor.istor: IsTor false`
+## Free usage limit reached, provider.quota, HTTP 429
 
-The request reached the internet without going through Tor. Check the forwarding rule and that Privoxy was restarted after the rule was added.
+The provider enforced a usage limit. This is independent of the Tor connectivity check. Ratriyx does not rotate accounts or bypass provider quota controls. Check the OpenCode provider quota, account, and plan.
 
-### `FAIL tor.istor: empty reply` or `SSL_ERROR_SYSCALL` right after a start
+## Verify whether OpenCode actually used the proxy
 
-Tor is still building circuits. Wait for `Bootstrapped 100%` in `journalctl -u tor@default`, then run the check again. Ratriyx does not retry in a loop.
+Run `ratriyx gateway tor run --trace-connections --opencode -- --standalone` using the latest feature-branch binary. This starts a disposable local Tor client, then records **only** proxy connections after the app starts. Make one authorized model request in the OpenCode UI, and look for the provider hostname, `socks-connected`, and `CONNECT tunnel-established`. `accepted=0` means this bridge saw no app-phase connection; it is **not** proof of direct bypass without independent evidence that a request was sent. Avoid logging credentials or model prompts. A pre-existing server may have a different proxy environment; use `--standalone`. See `docs/alternate-gateway.md` for limitations.
 
-### `FAIL tor.istor: HTTP 407`
+For full-screen OpenCode, the trace is intentionally buffered and printed **after you exit OpenCode**. No live `ratriyx trace` messages should draw over its interface. The event log is limited to 512 entries with an omission count; the connection counters still include the full run. An older Ratriyx binary that prints trace entries continuously can corrupt the TUI; use the latest built executable.
 
-Privoxy wants proxy authentication. Ratriyx does not send credentials. Check Privoxy's `actionsfile` and `user.action` rules.
+If a disposable second Tor instance stalls at a bootstrap percentage and times out, Ratriyx refuses to launch the app and cleans up only that temporary Tor instance. A healthy primary Tor route can still be used for diagnostics; inspect temporary Tor notices for slow or blocked circuits rather than assuming the application bypassed the proxy.
 
-### `WARN env.proxy: proxy variables set in this process`
+## Direct connectivity unavailable
 
-Your shell has proxy variables. Direct mode removes them for children, but applications that read them directly are not affected. Clear them with `eval "$(ratriyx off)"`.
+Run `ratriyx run --opencode --mode direct` to clear proxy variables for that child. This does not change the current shell's environment or Windows-wide network settings. A direct IP probe failure is reported separately.
 
-### `WARN opencode.resolution: Windows interop launcher`
+## Strict mode refuses to start
 
-`opencode` on your PATH is a Windows program started through WSL. Its environment comes from `WSLENV`, which Ratriyx cannot verify. Tor mode refuses it. Direct mode runs it and labels the environment "not verified".
+Strict OS-enforced isolation is not implemented. `ratriyx strict check` checks Windows capabilities without enabling firewall filters. `ratriyx run --strict` deliberately refuses and leaves the child unstarted.
 
-### `run` refuses: "Tor route not verified"
+## Legacy Privoxy configuration
 
-Nothing was launched. Fix the failing check from `doctor --mode tor`. The only way to run anyway is `--allow-unverified`, which labels the route unverified in every output.
-
-### `FAIL direct.https` in direct mode
-
-Your general network connection is down, or DNS fails. Ratriyx cannot fix that. Check the connection first.
-
-### A provider says "Rate limit exceeded" or HTTP 429
-
-This is a provider limit. It is not a proxy or Tor fault, and changing the Tor exit does not change it. Check your quota, plan, and key status with the provider. Ratriyx does not rotate identities or retry in a loop.
-
-### `rotate` says "cooldown" or does not change the exit
-
-`rotate` sends one NEWNYM signal per 10 seconds at most. The exit can stay the same, and circuits in use keep working. Run `ratriyx ip` afterwards to see the result.
-
-### `ratriyx: unsupported platform` (exit 3)
-
-Ratriyx supports Linux, native Windows, and macOS. WSL1, untested setups, and unknown systems are labelled conditional or refused. On native Windows, run the Windows build in Windows PowerShell with the scripts in `scripts/windows/`.
-
-## Collecting a report
-
-```bash
-ratriyx doctor --mode tor --json > doctor.json
-```
-
-The output redacts URL passwords and token-like values. Still check the file before you share it.
+`run --privoxy`, `ip --privoxy`, `configure`, `restore`, and explicit Privoxy removal remain solely for older installations. These settings are not part of normal setup, doctor, status or embedded Tor launch. Uninstall removal requires ownership checks or explicit additional authorization.

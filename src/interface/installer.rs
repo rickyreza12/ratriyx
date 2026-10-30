@@ -165,7 +165,7 @@ impl Dashboard {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Component {
     Tor,
-    Privoxy,
+    Proxy,
     Verification,
 }
 
@@ -173,8 +173,8 @@ fn component(label: &str) -> Component {
     let lower = label.to_ascii_lowercase();
     if lower.starts_with("verif") || lower.contains("istor") || lower.contains("route") {
         Component::Verification
-    } else if lower.contains("privoxy") {
-        Component::Privoxy
+    } else if lower.contains("proxy") {
+        Component::Proxy
     } else {
         Component::Tor
     }
@@ -293,7 +293,7 @@ fn draw(frame: &mut Frame, state: &Dashboard) {
         });
     for (i, (target, title, color)) in [
         (Component::Tor, "Tor       ", Color::LightCyan),
-        (Component::Privoxy, "Privoxy   ", Color::Blue),
+        (Component::Proxy, "Proxy     ", Color::Blue),
         (Component::Verification, "Route     ", Color::LightGreen),
     ]
     .iter()
@@ -480,12 +480,12 @@ mod tests {
             state.update(Event::Plan(vec![
                 "Downloading Tor".into(),
                 "Starting Tor".into(),
-                "Installing Privoxy".into(),
-                "Starting Privoxy".into(),
+                "Preparing embedded proxy".into(),
+                "Starting embedded proxy".into(),
                 "Verifying IsTor".into(),
             ]));
-            state.update(Event::Stage(3, 5, "Installing Privoxy".into()));
-            state.update(Event::Activity("WinGet installing Privoxy".into(), 8));
+            state.update(Event::Stage(3, 5, "Preparing embedded proxy".into()));
+            state.update(Event::Activity("Binding a temporary proxy port".into(), 8));
             terminal.draw(|frame| draw(frame, &state)).unwrap();
         }
     }
@@ -496,17 +496,17 @@ mod tests {
         state.update(Event::Plan(vec![
             "Downloading Tor".into(),
             "Starting Tor".into(),
-            "Installing Privoxy".into(),
-            "Starting Privoxy".into(),
+            "Preparing embedded proxy".into(),
+            "Starting embedded proxy".into(),
             "Verifying IsTor".into(),
         ]));
-        state.update(Event::Stage(3, 5, "Installing Privoxy".into()));
+        state.update(Event::Stage(3, 5, "Preparing embedded proxy".into()));
         assert_eq!(component_progress(&state, Component::Tor), (2, 2));
-        assert_eq!(component_progress(&state, Component::Privoxy), (0, 2));
+        assert_eq!(component_progress(&state, Component::Proxy), (0, 2));
         assert_eq!(component_progress(&state, Component::Verification), (0, 1));
         state.update(Event::Stage(5, 5, "Verifying IsTor".into()));
         state.update(Event::Done("IsTor=true".into()));
-        assert_eq!(component_progress(&state, Component::Privoxy), (2, 2));
+        assert_eq!(component_progress(&state, Component::Proxy), (2, 2));
         assert_eq!(component_progress(&state, Component::Verification), (1, 1));
     }
 }

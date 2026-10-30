@@ -167,7 +167,7 @@ pub fn rotate(config: &Config, state_file: &Path, now: u64, yes: bool) -> Result
     } else {
         newnym_socket(&config.tor_control_socket, &cookie)?;
     }
-    Ok("NEWNYM accepted. Check the exit with `ratriyx ip`. The exit may stay the same, and circuits already in use can keep working.".into())
+    Ok("Tor acknowledged NEWNYM. Check the exit with `ratriyx ip`; Tor may rate-limit new circuits, the exit may stay the same, and existing connections remain active.".into())
 }
 
 /// Refuses while the last recorded NEWNYM is still inside the cooldown window.

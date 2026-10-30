@@ -49,6 +49,17 @@ pub fn run_child(program: &str, args: &[String], plan: &EnvPlan) -> Result<i32> 
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::Io(format!("cannot start {program}: {e}")))?;
+    #[cfg(windows)]
+    let _job = match crate::infrastructure::job_windows::WindowsJob::attach(&child) {
+        Ok(job) => job,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::PostLaunch(format!(
+                "could not protect child process lifetime: {error}; child was stopped"
+            )));
+        }
+    };
     finish(program, child.wait())
 }
 

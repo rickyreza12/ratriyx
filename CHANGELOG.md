@@ -2,7 +2,41 @@
 
 All notable changes to Ratriyx are recorded here.
 
-## 0.3.0 (unreleased)
+## Unreleased (after 0.4.1)
+
+- Fixed `--trace-connections` corrupting full-screen OpenCode TUI by buffering sanitized proxy connection events until the launched app exits. Cap retained entries at 512, report overflow and keep complete connection counters.
+- Added opt-in `--trace-connections` to embedded Tor `run`, external `gateway run`, and no-VPS `gateway tor run`. Application-phase traces show only accepted proxy connections, hostname/port, SOCKS results and CONNECT status; verification probes are excluded. Includes focused tests for app-phase accounting, secret-free event formatting and failed-SOCKS behavior. Tracing cannot prove absence of direct connections.
+- Added a no-VPS Windows `gateway tor check/run` route. It starts a disposable second local Tor instance with its own data directory and loopback SOCKS listener, excludes the currently verified Tor exit, verifies a distinct public IP for the Tor probe, and stops its own child on exit without changing the original managed Tor.
+- Added opt-in `gateway check/run --socks 127.0.0.1:PORT` for a separately operated local SOCKS5 endpoint (for example an SSH tunnel to an owned VPS); verified egress must differ from direct and an optional excluded IP, and failures refuse to launch.
+- Normal setup, recovery and diagnostics now use Tor plus a temporary embedded Rust HTTP proxy, without installing or starting Privoxy.
+- Windows Tor-mode launches can restart a previously installed managed Tor bundle; initial bootstrap uses bounded retry for transient IsTor transport failures.
+- `status`, `doctor`, `ip` and `run` inspect the embedded route; Tor launches report the verified exit IP when available, and direct launches may report their public IP.
+- Windows child processes use an owned kill-on-close Job Object for lifetime cleanup when assignment succeeds; strict OS network isolation is still unavailable.
+- Tor-mode shell snippets refuse because they cannot own the temporary proxy. Updated Windows setup/OpenCode docs and the opt-in live test.
+
+## 0.4.1 (2026-10-28)
+
+- Documentation and CI maintenance release to refresh the README displayed on crates.io.
+- Added a prioritized `docs/NEXT_STEPS.md` roadmap and aligned v0.4 docs with the published implementation and security limitations.
+- Fixed `clippy::needless_question_mark` (Linux) and `clippy::chunks_exact_to_as_chunks` (Windows) reported by Rust 1.99 CI with `-D warnings`.
+- No change to the v0.4.0 command behavior.
+
+## 0.4.0 (2026-10-28)
+
+- Fixed Windows PowerShell 5.1/7 profile discovery on redirected Documents folders (including OneDrive) using the Windows Known Folder API. Enabling the profile now migrates and backs up the previous Ratriyx-managed block from the legacy USERPROFILE path without overwriting unrelated user settings.
+- PowerShell profiles now retain the configured proxy variables when the proxy is temporarily unavailable and warn clearly instead of silently sending proxy-aware traffic directly.
+- Added local privacy assessment that refuses to claim anonymity or hide application identity leakage.
+- Added opt-in desktop HTTP proxy server with explicit, restorable Windows current-user, PowerShell profile and Zed integrations (development).
+- Added read-only Tor circuit cooldown status and verified post-rotation checks through the embedded proxy, while preserving provider quota boundaries.
+
+## 0.3.0 (2026-10-28)
+
+### Embedded proxy (experimental)
+
+- `run --mode tor` and `ip` use a temporary, loopback-only embedded Rust HTTP-to-SOCKS5 proxy by default, forwarding target names through Tor's SOCKS5 endpoint for remote DNS.
+- `--privoxy` explicitly retains the legacy frontend for `run` and `ip`. Existing `--embedded-proxy` scripts continue to work.
+- Embedded proxy supports HTTP requests with Content-Length and HTTPS CONNECT, refuses failed Tor connections, and verifies `IsTor=true` before launching a child.
+- `--strict` continues to refuse to launch until OS-backed enforcement exists. Application logins, DNS outside the proxy, and applications bypassing environment proxy variables remain important limitations.
 
 ### Windows managed setup and terminal UX
 
