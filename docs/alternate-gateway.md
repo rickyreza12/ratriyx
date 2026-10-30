@@ -40,10 +40,14 @@ charges. Do not run multiple provider requests when a usage limit is exhausted.
 and external `gateway run`, provided Ratriyx owns the embedded proxy.
 It is deliberately rejected in `run --mode direct` and `run --privoxy`.
 Before launching the child, Ratriyx checks Tor with its *own* requests; those
-are **not** counted. After `application window started`, it prints entries
-such as `CONNECT socks-attempt host=api.example.org port=443`,
-`socks-connected`, `CONNECT tunnel-established`, and a summary of accepted
-clients and successful/failed SOCKS connections.
+are **not** counted. While an interactive OpenCode TUI is on screen, trace
+events are kept in a bounded in-memory buffer instead of being written to
+the shared terminal, which would corrupt the full-screen interface. **Close
+OpenCode to display the trace.** Ratriyx then prints entries such as
+`CONNECT socks-attempt host=api.example.org port=443`, `socks-connected`,
+`CONNECT tunnel-established`, and a summary of accepted clients and successful
+or failed SOCKS connections. The buffer retains at most 512 events, reports
+omitted events, and continues counting all connections in the summary.
 
 The trace contains no request path, query, headers, API keys, body, prompt or
 model response. A hostname may itself be sensitive, so review output before

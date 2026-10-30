@@ -36,6 +36,8 @@ The provider enforced a usage limit. This is independent of the Tor connectivity
 
 Run `ratriyx gateway tor run --trace-connections --opencode -- --standalone` using the latest feature-branch binary. This starts a disposable local Tor client, then records **only** proxy connections after the app starts. Make one authorized model request in the OpenCode UI, and look for the provider hostname, `socks-connected`, and `CONNECT tunnel-established`. `accepted=0` means this bridge saw no app-phase connection; it is **not** proof of direct bypass without independent evidence that a request was sent. Avoid logging credentials or model prompts. A pre-existing server may have a different proxy environment; use `--standalone`. See `docs/alternate-gateway.md` for limitations.
 
+For full-screen OpenCode, the trace is intentionally buffered and printed **after you exit OpenCode**. No live `ratriyx trace` messages should draw over its interface. The event log is limited to 512 entries with an omission count; the connection counters still include the full run. An older Ratriyx binary that prints trace entries continuously can corrupt the TUI; use the latest built executable.
+
 If a disposable second Tor instance stalls at a bootstrap percentage and times out, Ratriyx refuses to launch the app and cleans up only that temporary Tor instance. A healthy primary Tor route can still be used for diagnostics; inspect temporary Tor notices for slow or blocked circuits rather than assuming the application bypassed the proxy.
 
 ## Direct connectivity unavailable

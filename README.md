@@ -171,6 +171,8 @@ server. Traces begin only after Ratriyx's own Tor verification is finished;
 they include destination hostname, port and SOCKS/CONNECT outcome, but no
 authorization headers, prompt or response bodies. An empty trace does **not**
 prove a direct connection: the application may simply have made no request.
+Interactive OpenCode displays connection details only **after it exits**, so
+diagnostic output cannot overwrite its full-screen terminal interface.
 See [alternate gateway diagnostics](docs/alternate-gateway.md).
 
 ## What Ratriyx does not guarantee

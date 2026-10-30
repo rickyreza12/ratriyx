@@ -4,7 +4,7 @@ use crate::domain::error::{Error, Result};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,6 +12,9 @@ const HEADER_LIMIT: usize = 32 * 1024;
 const MAX_CLIENTS: usize = 64;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
+// A long-lived interactive application can open many connections. Keep only a
+// bounded diagnostic sample rather than growing memory for the whole session.
+const TRACE_EVENT_LIMIT: usize = 512;
 
 pub struct EmbeddedProxy {
     address: SocketAddr,
@@ -30,6 +33,8 @@ struct ConnectionTrace {
     socks_connected: AtomicUsize,
     socks_failed: AtomicUsize,
     tunnels: AtomicUsize,
+    events: Mutex<Vec<String>>,
+    omitted_events: AtomicUsize,
 }
 
 impl ConnectionTrace {
@@ -38,7 +43,14 @@ impl ConnectionTrace {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        eprintln!("{}", format_event(ms, id, outcome, dest));
+        // Never print from a proxy worker while a full-screen child TUI owns
+        // the terminal: writing to inherited stderr corrupts its frame.
+        let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        if events.len() < TRACE_EVENT_LIMIT {
+            events.push(format_event(ms, id, outcome, dest));
+        } else {
+            self.omitted_events.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn accept(&self) -> Option<usize> {
@@ -50,6 +62,25 @@ impl ConnectionTrace {
     }
 
     fn summary(&self) {
+        // Called only after the launched foreground application has exited.
+        let buffered = {
+            let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut *events)
+        };
+        // The child may exit without a trailing newline. Start a fresh line
+        // before the post-run report rather than appending to its last frame.
+        eprintln!(
+            "\nratriyx trace: application window finished; buffered connection events follow"
+        );
+        for event in buffered {
+            eprintln!("{event}");
+        }
+        let omitted = self.omitted_events.load(Ordering::Relaxed);
+        if omitted > 0 {
+            eprintln!(
+                "ratriyx trace: {omitted} additional events omitted (limit {TRACE_EVENT_LIMIT}); summary counts include them"
+            );
+        }
         eprintln!(
             "ratriyx trace: app summary accepted={} socks_attempted={} socks_connected={} socks_failed={} connect_tunnels={}",
             self.accepted.load(Ordering::Acquire),
@@ -131,7 +162,6 @@ impl EmbeddedProxy {
     pub fn begin_application_trace(&self) {
         if let Some(trace) = &self.trace {
             trace.application_phase.store(true, Ordering::Release);
-            eprintln!("ratriyx trace: application window started (preflight probes excluded)");
         }
     }
 
@@ -625,7 +655,19 @@ mod tests {
         let n = app.read(&mut response).unwrap();
         assert!(String::from_utf8_lossy(&response[..n]).contains("200 Connection Established"));
         task.join().unwrap();
+        // Proxy worker threads must not write to the TUI's terminal. All
+        // events remain buffered until the launcher finishes the child.
+        let buffered = trace.events.lock().unwrap();
+        assert!(buffered.iter().any(|s| s.contains("socks-connected")));
+        assert!(buffered
+            .iter()
+            .any(|s| s.contains("CONNECT tunnel-established")));
+        let combined = buffered.join("\n");
+        assert!(!combined.contains("Authorization"));
+        assert!(!combined.contains("secret-key"));
+        drop(buffered);
         proxy.end_application_trace();
+        assert!(trace.events.lock().unwrap().is_empty());
         assert_eq!(trace.accepted.load(Ordering::Acquire), 1);
         assert_eq!(trace.socks_attempts.load(Ordering::Acquire), 1);
         assert_eq!(trace.socks_connected.load(Ordering::Acquire), 1);
@@ -649,6 +691,21 @@ mod tests {
         assert_eq!(trace.socks_failed.load(Ordering::Acquire), 1);
         assert_eq!(trace.socks_connected.load(Ordering::Acquire), 0);
         assert_eq!(trace.tunnels.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn trace_buffer_caps_memory_and_tracks_omitted_events() {
+        let trace = ConnectionTrace::default();
+        let dest = destination("api.example.org:443", 443).unwrap();
+        for i in 0..TRACE_EVENT_LIMIT + 5 {
+            trace.event(i, "CONNECT socks-attempt", Some(&dest));
+        }
+        let events = trace.events.lock().unwrap();
+        assert_eq!(events.len(), TRACE_EVENT_LIMIT);
+        assert!(events
+            .iter()
+            .all(|line| line.contains("host=api.example.org port=443")));
+        assert_eq!(trace.omitted_events.load(Ordering::Acquire), 5);
     }
 
     #[test]
