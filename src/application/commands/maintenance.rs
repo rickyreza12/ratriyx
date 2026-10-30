@@ -3,7 +3,6 @@ use crate::domain::error::{Error, Result};
 use crate::domain::route::{Mode, PROXY_VARS};
 use crate::infrastructure::config::{self, Config};
 use crate::infrastructure::fsutil;
-use crate::infrastructure::hash::sha256_hex;
 use crate::infrastructure::managed;
 use crate::infrastructure::privoxy;
 use crate::infrastructure::service;
@@ -51,103 +50,47 @@ pub fn setup_install(cfg: &Config, yes: bool) -> Result<i32> {
         )?;
         say!("installed curl through WinGet");
     }
-    if cfg!(windows) || !facts.tor_installed || !facts.privoxy_installed {
-        #[cfg(windows)]
-        {
-            if diagnostics::route_verified_with_timeout(cfg, 4) {
-                say!("setup: Tor and Privoxy already healthy, IsTor=true");
-                return Ok(0);
-            }
-            return setup_install_managed_windows(cfg, &facts, yes, &dir);
+    #[cfg(windows)]
+    {
+        setup_install_managed_windows(cfg, &facts, yes, &dir)
+    }
+    #[cfg(not(windows))]
+    {
+        if !facts.tor_installed {
+            return Err(Error::Config(
+                "Tor is not installed; install Tor using your package manager, then retry".into(),
+            ));
         }
-        #[cfg(not(windows))]
-        {
-            for (present, name) in [
-                (facts.tor_installed, "tor"),
-                (facts.privoxy_installed, "privoxy"),
-            ] {
-                if !present {
-                    return Err(Error::Config(format!(
-                        "{name} is not installed; install it with your package manager, then re-run `ratriyx setup --install --yes`"
-                    )));
-                }
+        let socks_addr = cfg.tor_socks_addr();
+        let was_running = crate::infrastructure::network::socks5_greeting(&socks_addr).is_ok();
+        if !was_running {
+            if !yes {
+                return Err(Error::Approval(
+                    "setup would start Tor; re-run with --install --yes to approve".into(),
+                ));
             }
+            service::control("start", service::TOR_INSTANCE, true)?;
         }
-    }
-    let forwarding =
-        privoxy::read_effective_for(Path::new(&cfg.privoxy_config), &cfg.desired_rule());
-    let tor_running = service::tor_state()
-        .map(|s| s.instance_running)
-        .unwrap_or(false);
-    let privoxy_running = service::unit_active(service::PRIVOXY).unwrap_or(false);
-    let plan = install_plan(&facts, &forwarding, tor_running, privoxy_running);
-    if plan.is_empty() {
-        if let Some(reason) = diagnostics::verify_route_with_timeout(cfg, 10) {
-            return Err(Error::Verification(format!(
-                "Tor and Privoxy appear installed, but routing is unverified: {reason}"
-            )));
-        }
-        say!("setup: Tor and Privoxy are healthy; route verified (IsTor true)");
-        return Ok(0);
-    }
-    if !yes {
-        return Err(Error::Approval(format!(
-            "managed setup would:\n  {}\nre-run with --install --yes to approve",
-            plan.join("\n  ")
-        )));
-    }
-    managed::stamp(&dir)?;
-    let path = PathBuf::from(&cfg.privoxy_config);
-    let mut edited = false;
-    let mut started: Vec<&str> = Vec::new();
-    if matches!(forwarding, privoxy::FwState::Absent) {
-        say!(
-            "{}",
-            privoxy::configure_file_for(&path, &cfg.desired_rule(), false, true)?
-        );
-        let backup = privoxy::latest_backup(&path)
-            .ok_or_else(|| Error::Io(format!("no ratriyx backup found for {}", path.display())))?;
-        let current = fs::read(&path).map_err(fsutil::io_err)?;
-        managed::record_file(&dir, &path, &sha256_hex(&current), &backup)?;
-        edited = true;
-    } else if let privoxy::FwState::Conflicting(rules) = &forwarding {
-        return Err(Error::Verification(format!(
-            "Privoxy rules at lines {} route destinations directly; review them by hand, then re-run",
-            rules
-                .iter()
-                .map(|r| r.line.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-    for (running, unit) in [
-        (tor_running, service::TOR_INSTANCE),
-        (privoxy_running, service::PRIVOXY),
-    ] {
-        if !running {
-            if let Err(e) = service::control("start", unit, true) {
-                rollback(&path, edited, &started);
-                return Err(e);
+        let result = (|| -> Result<i32> {
+            let socks = socks_addr
+                .parse()
+                .map_err(|_| Error::Config("invalid Tor SOCKS5 socket address".into()))?;
+            let proxy = crate::infrastructure::embedded_proxy::EmbeddedProxy::start(socks)?;
+            let mut probe_cfg = cfg.clone();
+            probe_cfg.proxy_host = proxy.address().ip().to_string();
+            probe_cfg.proxy_port = proxy.address().port();
+            if let Some(reason) = diagnostics::verify_route_with_timeout(&probe_cfg, 30) {
+                return Err(Error::Verification(format!(
+                    "embedded Tor route could not be verified: {reason}"
+                )));
             }
-            say!("started {unit}");
-            if let Err(e) = managed::record_service(&dir, unit) {
-                rollback(&path, edited, &started);
-                return Err(e);
-            }
-            started.push(unit);
-        }
-    }
-    match diagnostics::verify_route_with_timeout(cfg, 10) {
-        None => {
-            say!("setup: managed services started and the route verified (IsTor true)");
+            say!("setup: Tor route verified through embedded Rust proxy (IsTor=true)");
             Ok(0)
+        })();
+        if result.is_err() && !was_running {
+            let _ = service::control("stop", service::TOR_INSTANCE, true);
         }
-        Some(reason) => {
-            rollback(&path, edited, &started);
-            Err(Error::Verification(format!(
-                "route did not verify ({reason}); managed changes were rolled back"
-            )))
-        }
+        result
     }
 }
 
@@ -169,7 +112,7 @@ fn setup_install_managed_windows(
         setup_install_managed_windows_inner(cfg, facts, true, dir)
     });
     if matches!(result, Ok(0)) {
-        say!("setup: managed Tor and Privoxy ready, IsTor=true");
+        say!("setup: managed Tor and embedded proxy verified, IsTor=true");
     }
     result
 }
@@ -182,103 +125,80 @@ fn setup_install_managed_windows_inner(
     dir: &Path,
 ) -> Result<i32> {
     use crate::infrastructure::winmanaged as wm;
-    let Some(base) = wm::managed_base() else {
+    let base = wm::managed_base()
+        .ok_or_else(|| Error::Config("cannot find LOCALAPPDATA for managed Tor setup".into()))?;
+    if cfg.tor_socks_host != "127.0.0.1" {
         return Err(Error::Config(
-            "cannot find LOCALAPPDATA for managed setup".into(),
+            "managed Tor requires tor.socks_host = 127.0.0.1".into(),
         ));
-    };
-    let listeners = service::listening().unwrap_or_default();
-    for port in [9050u16, 9051, 8118] {
-        if !wm::port_free(&listeners, port) {
-            return Err(Error::Verification(format!(
-                "port {port} is already occupied; managed setup refuses to take it over"
-            )));
-        }
     }
     let tor_dir = base.join("tor");
     let data_dir = tor_dir.join("Data");
     let torrc = tor_dir.join("torrc");
     let tor_exe = tor_dir.join("Tor").join("tor.exe");
-    let conf = base.join("privoxy.conf");
-    let tor_pid = wm::pid_path(dir, "tor");
-    let privoxy_pid = wm::pid_path(dir, "privoxy");
-    let tor_stderr_log = dir.join("setup-tor-stderr.log");
-    let tor_notices = tor_stderr_log.clone();
-    let tor_dir_preexisting = tor_dir.exists();
-    let conf_preexisting = conf.exists();
     let tor_present = tor_exe.is_file() && torrc.is_file();
-    if tor_dir_preexisting && !tor_present {
+    if tor_dir.exists() && !tor_present {
         return Err(Error::Verification(format!(
-            "Ratriyx Tor directory {} exists but is incomplete. Refusing to overwrite it; inspect it before retrying.",
+            "Ratriyx Tor directory {} is incomplete; refusing to overwrite it",
             tor_dir.display()
         )));
     }
-    if tor_present
-        && !fs::read_to_string(&torrc)
-            .map_err(fsutil::io_err)?
-            .starts_with("# Managed by ratriyx.")
-    {
-        return Err(Error::Verification(
-            "existing Tor config is not owned by Ratriyx; refusing to reuse it".into(),
-        ));
+    if tor_present {
+        let existing = fs::read_to_string(&torrc).map_err(fsutil::io_err)?;
+        if existing != wm::torrc_text(&data_dir, cfg.tor_socks_port, cfg.tor_control_port) {
+            return Err(Error::Verification(
+                "managed Tor configuration was changed; refusing to overwrite it".into(),
+            ));
+        }
     }
-    let path_var = env::var_os("PATH").unwrap_or_default();
-    let existing_privoxy = wm::find_privoxy_exe(&path_var);
-    if existing_privoxy.is_none() && wm::winget_has_package(wm::PRIVOXY_WINGET_ID) {
-        return Err(Error::Verification(
-            "Privoxy is registered in WinGet, but privoxy.exe is not in a known location. Refusing to upgrade a package with an unknown version. Inspect WinGet installation paths or repair it explicitly.".into(),
-        ));
-    }
-    if conf_preexisting
-        && fs::read_to_string(&conf).map_err(fsutil::io_err)?
-            != wm::privoxy_conf_text(8118, "127.0.0.1:9050")
-    {
-        return Err(Error::Verification(format!(
-            "Existing configuration {} has been modified; refusing to overwrite it",
-            conf.display()
-        )));
+    let socks_addr = cfg.tor_socks_addr();
+    if crate::infrastructure::network::socks5_greeting(&socks_addr).is_ok() {
+        let mut probe_cfg = cfg.clone();
+        let socks = socks_addr
+            .parse()
+            .map_err(|_| Error::Config("invalid managed Tor SOCKS5 socket address".into()))?;
+        let proxy = crate::infrastructure::embedded_proxy::EmbeddedProxy::start(socks)?;
+        probe_cfg.proxy_host = proxy.address().ip().to_string();
+        probe_cfg.proxy_port = proxy.address().port();
+        return match diagnostics::verify_route_with_timeout(&probe_cfg, 15) {
+            None => {
+                say!("setup: Tor is already running; embedded route verified (IsTor=true)");
+                Ok(0)
+            }
+            Some(reason) => Err(Error::Verification(format!(
+                "SOCKS5 is listening but its Tor exit could not be verified: {reason}"
+            ))),
+        };
     }
     let install_tor = !tor_present;
-    let install_privoxy = existing_privoxy.is_none();
     let mut plan = Vec::new();
     if install_tor {
         plan.push(format!(
-            "download Tor {} and verify checksum",
+            "download pinned Tor {} and verify its checksum",
             wm::TOR_BUNDLE_VERSION
         ));
-        plan.push("extract Tor and write its config".to_string());
+        plan.push("extract Tor and write the owned loopback torrc".to_string());
     } else {
-        plan.push("reuse the existing Ratriyx-owned Tor bundle".into());
+        plan.push("reuse the existing managed Tor bundle".into());
     }
-    plan.push("start Tor SOCKS5".into());
-    if install_privoxy {
-        plan.push("install missing Privoxy with WinGet".into());
-    } else {
-        plan.push("reuse installed Privoxy, without an upgrade".into());
-    }
-    plan.push("start Privoxy HTTP proxy".into());
-    plan.push("verify IsTor=true".into());
+    plan.push("start managed Tor and wait for 100% bootstrap".into());
+    plan.push("verify the route through a temporary embedded Rust HTTP proxy".into());
     if !yes {
         return Err(Error::Approval(format!(
             "managed setup would:\n  {}\nre-run with --install --yes to approve",
             plan.join("\n  ")
         )));
     }
-    // Include Tor network bootstrap as its own verified stage.
-    let total = (if install_tor { 3 } else { 1 }) + (if install_privoxy { 2 } else { 1 }) + 2;
-    let mut step_names = Vec::new();
+
+    let total = if install_tor { 4 } else { 2 };
+    let mut stages = Vec::new();
     if install_tor {
-        step_names.push("Downloading and verifying Tor".into());
-        step_names.push("Extracting Tor and writing configuration".into());
+        stages.push("Downloading and verifying Tor".into());
+        stages.push("Extracting Tor and writing configuration".into());
     }
-    step_names.push("Starting Tor SOCKS5".into());
-    step_names.push("Bootstrapping Tor network to 100%".into());
-    if install_privoxy {
-        step_names.push("Installing Privoxy through WinGet".into());
-    }
-    step_names.push("Starting Privoxy HTTP proxy".into());
-    step_names.push("Verifying real Tor routing (IsTor)".into());
-    crate::interface::installer::plan(step_names);
+    stages.push("Starting managed Tor and waiting for bootstrap".into());
+    stages.push("Verifying IsTor through embedded proxy".into());
+    crate::interface::installer::plan(stages);
     let mut step = 0usize;
     crate::interface::terminal::install_header();
     macro_rules! stage {
@@ -287,27 +207,6 @@ fn setup_install_managed_windows_inner(
             crate::interface::terminal::install_stage(step, total, $message);
         }};
     }
-    let rollback_created = |started: &[PathBuf]| {
-        for pid in started.iter().rev() {
-            let _ = wm::stop_tracked(pid);
-        }
-        crate::interface::terminal::install_log(
-            "Rolling back only processes started by this setup",
-        );
-        // Do NOT delete downloaded/extracted Tor or its partially loaded
-        // consensus on a slow-network verification failure: the next
-        // attempt can reuse its existing data and cached descriptors.
-        crate::interface::terminal::install_log(
-            "Retaining Ratriyx-managed Tor and Privoxy files for safe retry",
-        );
-        crate::interface::terminal::install_log(&format!(
-            "Tor startup stderr preserved: {}",
-            tor_stderr_log.display()
-        ));
-    };
-    let mut started: Vec<PathBuf> = Vec::new();
-    // Tor comes first. Existing managed binaries can be started again
-    // without downloading or extracting over previous files.
     if install_tor {
         stage!("Downloading and verifying Tor");
         let bundle = winpkg::execute(
@@ -322,9 +221,11 @@ fn setup_install_managed_windows_inner(
         if let Err(error) = (|| -> Result<()> {
             wm::extract_bundle(&bundle.path, &tor_dir)?;
             fs::create_dir_all(&data_dir).map_err(fsutil::io_err)?;
-            fs::write(&torrc, wm::torrc_text(&data_dir, 9050, 9051)).map_err(fsutil::io_err)?;
-            // Ownership describes actual files installed, not whether routing
-            // has already succeeded. Persist this BEFORE network bootstrap.
+            fs::write(
+                &torrc,
+                wm::torrc_text(&data_dir, cfg.tor_socks_port, cfg.tor_control_port),
+            )
+            .map_err(fsutil::io_err)?;
             managed::stamp(dir)?;
             managed::record_dependency(
                 dir,
@@ -336,237 +237,106 @@ fn setup_install_managed_windows_inner(
             managed::record_file(dir, &torrc, "", &PathBuf::new())?;
             Ok(())
         })() {
-            if !torrc.exists() && !tor_dir_preexisting {
+            if !torrc.exists() {
                 let _ = fs::remove_dir_all(&tor_dir);
             }
-            rollback_created(&started);
             return Err(error);
         }
-        crate::interface::terminal::install_done("Tor files extracted");
+        crate::interface::terminal::install_done("Managed Tor files extracted");
     }
-    if let Err(error) = (|| -> Result<()> {
-        stage!("Starting Tor SOCKS5");
-        crate::interface::terminal::install_log("Validating Tor configuration");
-        let torrc_arg = torrc.to_string_lossy().to_string();
-        let check = std::process::Command::new(&tor_exe)
-            .args(["-f", torrc_arg.as_str(), "--verify-config"])
-            .output()
-            .map_err(|err| Error::Io(format!("cannot validate Tor configuration: {err}")))?;
-        if !check.status.success() {
-            return Err(Error::Verification(format!(
-                "Tor rejected configuration ({}): {} {}",
-                check.status,
-                String::from_utf8_lossy(&check.stdout).trim(),
-                String::from_utf8_lossy(&check.stderr).trim()
-            )));
-        }
-        let mut child = wm::spawn_tracked_logged(
-            &tor_exe,
-            &["-f", torrc_arg.as_str()],
-            &tor_pid,
-            &tor_stderr_log,
-        )?;
-        started.push(tor_pid.clone());
-        wm::wait_for_socks_with_child(
-            "127.0.0.1:9050",
-            60,
-            &mut child,
-            &tor_stderr_log,
-            &tor_notices,
-        )?;
-        crate::interface::terminal::install_done("Tor SOCKS5 port 9050 ready");
-        stage!("Bootstrapping Tor network to 100%");
-        wm::wait_for_bootstrap_with_child(&mut child, &tor_stderr_log, 300)?;
-        crate::interface::terminal::install_done("Tor circuit bootstrap reached 100%");
-        Ok(())
-    })() {
-        rollback_created(&started);
-        return Err(error);
-    }
-    // Avoid WinGet install on an already installed Privoxy. WinGet cannot
-    // upgrade unknown versions; its executable is the reliable signal.
-    let mut privoxy_exe = existing_privoxy;
-    if install_privoxy {
-        stage!("Installing Privoxy through WinGet");
-        if let Err(error) = (|| -> Result<()> {
-            winpkg::execute(
-                &winpkg::Action::WingetInstall {
-                    package: wm::PRIVOXY_WINGET_ID.into(),
-                },
-                &base,
-            )?;
-            // WinGet has already installed the package. Record its ownership
-            // even if subsequent start/IsTor verification fails.
-            managed::stamp(dir)?;
-            managed::record_dependency(
-                dir,
-                "privoxy",
-                "winget:Privoxy.Privoxy",
-                "unknown",
-                "package-manager",
-            )?;
-            privoxy_exe = wm::find_privoxy_exe(&path_var);
-            if privoxy_exe.is_none() {
-                return Err(Error::Verification(
-                    "WinGet completed, but Privoxy executable was not found".into(),
-                ));
-            }
-            crate::interface::terminal::install_done("Privoxy installed");
-            Ok(())
-        })() {
-            rollback_created(&started);
-            return Err(error);
-        }
-    }
-    if let Err(error) = (|| -> Result<()> {
-        stage!("Starting Privoxy HTTP proxy");
-        let exe = privoxy_exe
-            .as_ref()
-            .ok_or_else(|| Error::Verification("Privoxy executable cannot be located".into()))?;
-        if !conf.exists() {
-            fs::write(&conf, wm::privoxy_conf_text(8118, "127.0.0.1:9050"))
-                .map_err(fsutil::io_err)?;
-            managed::stamp(dir)?;
-            managed::record_file(dir, &conf, "", &PathBuf::new())?;
-        }
-        let conf_arg = conf.to_string_lossy().to_string();
-        wm::spawn_tracked(exe, &[conf_arg.as_str()], &privoxy_pid)?;
-        started.push(privoxy_pid.clone());
-        wait_for_listener(8118, 30)?;
-        crate::interface::terminal::install_done("Privoxy HTTP port 8118 ready");
-        Ok(())
-    })() {
-        rollback_created(&started);
-        return Err(error);
-    }
-    let mcfg = Config {
-        privoxy_config: conf.to_string_lossy().to_string(),
-        tor_cookie_path: data_dir
-            .join("control_auth_cookie")
-            .to_string_lossy()
-            .to_string(),
-        ..cfg.clone()
-    };
-    stage!("Verifying actual Tor routing (IsTor)...");
-    match diagnostics::verify_route_with_timeout(&mcfg, 30) {
+    stage!("Starting managed Tor and waiting for bootstrap");
+    wm::ensure_managed_tor(cfg)?;
+    crate::interface::terminal::install_done("Tor SOCKS5 available and bootstrap complete");
+
+    stage!("Verifying IsTor through embedded proxy");
+    let socks = socks_addr
+        .parse()
+        .map_err(|_| Error::Config("invalid managed Tor SOCKS5 socket address".into()))?;
+    let proxy = crate::infrastructure::embedded_proxy::EmbeddedProxy::start(socks)?;
+    let mut probe_cfg = cfg.clone();
+    probe_cfg.proxy_host = proxy.address().ip().to_string();
+    probe_cfg.proxy_port = proxy.address().port();
+    match diagnostics::verify_route_with_timeout(&probe_cfg, 30) {
         None => {
-            crate::interface::terminal::install_done("IsTor=true; route verified");
+            crate::interface::terminal::install_done("Embedded Tor route verified (IsTor=true)");
             crate::interface::terminal::install_success(total);
             Ok(0)
         }
         Some(reason) => {
-            rollback_created(&started);
+            let pid_file = wm::pid_path(dir, "tor");
+            if let Err(cleanup) = wm::stop_tracked_verified(&pid_file, &tor_exe, &torrc) {
+                return Err(Error::Verification(format!(
+                    "IsTor verification failed ({reason}); managed Tor cleanup also failed ({cleanup})"
+                )));
+            }
             Err(Error::Verification(format!(
-                "Tor bootstrapped 100% and both proxy listeners started, but external IsTor verification via Privoxy failed ({reason}); started processes were stopped. Tor log: {}. Check access to https://check.torproject.org/api/ip through the proxy. Owned installation files remain for a retry.",
-                tor_stderr_log.display()
+                "IsTor verification failed ({reason}); newly started managed Tor was stopped"
             )))
         }
     }
 }
 
-/// Polls the listener table until `port` appears or the deadline passes.
-#[cfg(windows)]
-fn wait_for_listener(port: u16, deadline_secs: u64) -> Result<()> {
-    use std::time::{Duration, Instant};
-    let start = Instant::now();
-    let mut next_report = 3;
-    loop {
-        let listeners = service::listening().unwrap_or_default();
-        if !crate::infrastructure::winmanaged::port_free(&listeners, port) {
-            return Ok(());
-        }
-        let elapsed = start.elapsed().as_secs();
-        if elapsed >= deadline_secs {
-            return Err(Error::Verification(format!(
-                "nothing listening on port {port} after {deadline_secs}s; refusing to continue"
-            )));
-        }
-        if elapsed >= next_report {
-            crate::interface::terminal::install_activity(
-                &format!("Waiting for Privoxy listener on port {port}"),
-                elapsed,
-            );
-            next_report = elapsed + 3;
-        }
-        std::thread::sleep(Duration::from_secs(1));
-    }
-}
-
-fn rollback(path: &Path, edited: bool, started: &[&str]) {
-    if edited {
-        let _ = rollback_managed(path);
-    }
-    for unit in started.iter().rev() {
-        let _ = service::control("stop", unit, true);
-    }
-}
-
-fn rollback_managed(path: &Path) -> Result<()> {
-    let backup = privoxy::latest_backup(path).ok_or_else(|| {
-        Error::Io(format!(
-            "no ratriyx backup found for rollback of {}",
-            path.display()
-        ))
-    })?;
-    privoxy::restore_file(path, &backup, true)?;
-    let _ = service::control("restart", service::PRIVOXY, true);
-    Ok(())
-}
-
-/// Pure plan behind `setup_install`: facts in, human-readable steps out.
-fn install_plan(
-    facts: &setup::SetupFacts,
-    forwarding: &privoxy::FwState,
-    tor_running: bool,
-    privoxy_running: bool,
-) -> Vec<String> {
-    let _ = facts;
-    let mut plan = Vec::new();
-    if matches!(forwarding, privoxy::FwState::Absent) {
-        plan.push("append the Privoxy forwarding rule with a backup".to_string());
-    }
-    if !tor_running {
-        plan.push(format!("start {}", service::TOR_INSTANCE));
-    }
-    if !privoxy_running {
-        plan.push(format!("start {}", service::PRIVOXY));
-    }
-    plan
-}
-
 pub fn recover(cfg: &Config, target: Mode, apply: bool, yes: bool) -> Result<i32> {
-    let stale: Vec<String> = PROXY_VARS
-        .iter()
-        .filter(|name| env::var_os(name).is_some())
-        .map(|name| name.to_string())
-        .collect();
-    let facts = recovery::Facts {
-        stale_proxy_vars: stale,
-        tor_running: service::tor_state()
-            .map(|s| s.instance_running)
-            .unwrap_or(false),
-        privoxy_running: service::unit_active(service::PRIVOXY).unwrap_or(false),
-        forwarding_present: matches!(
-            privoxy::read_effective_for(Path::new(&cfg.privoxy_config), &cfg.desired_rule()),
-            privoxy::FwState::Present
-        ),
-        istor: match target {
-            Mode::Tor => Some(diagnostics::route_verified_with_timeout(cfg, 5)),
-            Mode::Direct => None,
-        },
-    };
-    let plan = recovery::plan(target, &facts);
-    show!("{}", recovery::render(&plan));
-    if apply {
-        for line in recovery::apply(&plan, yes)? {
-            say!("{line}");
-        }
-    } else {
-        eprintln!(
-            "ratriyx: dry run; nothing changed. Use --apply --yes to start approved services"
+    if target == Mode::Direct {
+        let stale = PROXY_VARS
+            .iter()
+            .filter(|name| env::var_os(name).is_some())
+            .map(|name| name.to_string())
+            .collect();
+        let plan = recovery::plan(
+            target,
+            &recovery::Facts {
+                stale_proxy_vars: stale,
+                tor_running: false,
+                privoxy_running: false,
+                forwarding_present: false,
+                istor: None,
+            },
         );
+        show!("{}", recovery::render(&plan));
+        if apply {
+            for line in recovery::apply(&plan, yes)? {
+                say!("{line}");
+            }
+        }
+        return Ok(0);
     }
-    Ok(0)
+    if apply {
+        if !yes {
+            return Err(Error::Approval(
+                "starting Tor requires --apply --yes".into(),
+            ));
+        }
+        #[cfg(windows)]
+        crate::infrastructure::winmanaged::ensure_managed_tor(cfg)?;
+        #[cfg(not(windows))]
+        if crate::infrastructure::network::socks5_greeting(&cfg.tor_socks_addr()).is_err() {
+            service::control("start", service::TOR_INSTANCE, true)?;
+        }
+    }
+    let socks = cfg
+        .tor_socks_addr()
+        .parse()
+        .map_err(|_| Error::Config("invalid Tor SOCKS5 socket address".into()))?;
+    let proxy = crate::infrastructure::embedded_proxy::EmbeddedProxy::start(socks)?;
+    let mut probe_cfg = cfg.clone();
+    probe_cfg.proxy_host = proxy.address().ip().to_string();
+    probe_cfg.proxy_port = proxy.address().port();
+    match diagnostics::verify_tor_exit_ip(&probe_cfg, 15) {
+        Ok(ip) => {
+            say!("Tor recovery: embedded proxy verified (IsTor=true)");
+            if let Some(ip) = ip {
+                say!("Tor exit IP: {ip}");
+            }
+            say!("launch: ratriyx run --opencode --mode tor");
+            Ok(0)
+        }
+        Err(reason) => {
+            say!("Tor recovery: not verified ({reason})");
+            say!("next: ratriyx setup --dry-run");
+            Ok(1)
+        }
+    }
 }
 
 pub fn uninstall(yes: bool) -> Result<i32> {
@@ -728,36 +498,7 @@ pub fn config_migrate(yes: bool) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interface::setup::SetupFacts;
-
-    fn facts() -> SetupFacts {
-        SetupFacts {
-            platform: "test".into(),
-            support: "test".into(),
-            systemd: false,
-            tor_installed: true,
-            privoxy_installed: true,
-            curl_installed: true,
-            package_manager: None,
-            forwarding: String::new(),
-            tor_state: String::new(),
-        }
-    }
-
-    #[test]
-    fn healthy_setup_needs_no_steps() {
-        let f = facts();
-        assert!(install_plan(&f, &privoxy::FwState::Present, true, true).is_empty());
-    }
-
-    #[test]
-    fn missing_rule_and_stopped_services_each_get_a_step() {
-        let f = facts();
-        let plan = install_plan(&f, &privoxy::FwState::Absent, false, false);
-        assert_eq!(plan.len(), 3);
-        assert!(plan[0].contains("forwarding"));
-        assert!(install_plan(&f, &privoxy::FwState::Present, true, false).len() == 1);
-    }
+    use crate::infrastructure::hash::sha256_hex;
 
     fn state_scratch(name: &str) -> PathBuf {
         let dir =

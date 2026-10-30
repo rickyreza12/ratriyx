@@ -3,6 +3,7 @@ use crate::domain::error::{Error, Result};
 use crate::domain::route::{self, Mode, Verify};
 use crate::infrastructure::config::Config;
 use crate::infrastructure::embedded_proxy::EmbeddedProxy;
+use crate::infrastructure::network::{self, Route};
 use crate::infrastructure::opencode;
 use crate::infrastructure::runner;
 use crate::infrastructure::shell;
@@ -38,9 +39,14 @@ pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
     } else {
         None
     };
-    // Own the proxy for the entire child lifetime. A fresh loopback port keeps
-    // the existing Privoxy setup untouched. Never start a protected child
-    // until this proxy's real Tor route has passed IsTor verification.
+    // On Windows an explicitly installed, Ratriyx-owned Tor can be restarted
+    // without downloads. This does not alter system proxy or network settings.
+    #[cfg(windows)]
+    if mode == Mode::Tor && embedded_proxy {
+        crate::infrastructure::winmanaged::ensure_managed_tor(cfg)?;
+    }
+    // Own an ephemeral loopback proxy for the entire child lifetime. Never
+    // launch until this proxy's real Tor route has passed IsTor verification.
     let mut embedded_cfg = cfg.clone();
     let _embedded = if embedded_proxy {
         let socks = cfg
@@ -66,12 +72,16 @@ pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
         }
     }
     let probe_needed = mode == Mode::Tor && !(interop && verify == Verify::Require);
-    let failure = if probe_needed {
-        diagnostics::verify_route(cfg)
+    let probe = if probe_needed {
+        Some(diagnostics::verify_tor_exit_ip(cfg, 30))
     } else {
         None
     };
-    let verified = probe_needed && failure.is_none();
+    let failure = probe
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .cloned();
+    let verified = probe.as_ref().is_some_and(|result| result.is_ok());
     match route::decide(mode, verify, verified, interop) {
         route::Decision::Refuse(msg) => Err(Error::Verification(match failure {
             Some(reason) => format!("{msg}; the proxied check said: {reason}"),
@@ -83,6 +93,32 @@ pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
                 Mode::Tor => "tor",
             };
             eprintln!("ratriyx: route {} ({mode_name} mode)", label.text());
+            if mode == Mode::Tor {
+                if let Some(Some(ip)) = probe.and_then(|result| result.ok()) {
+                    eprintln!("ratriyx: verified Tor exit IP: {ip}");
+                }
+            } else {
+                let direct = network::fetch(&Route::Direct, diagnostics::DIRECT_URL, 10);
+                match direct.outcome {
+                    Ok(response) if response.status == 200 => {
+                        let ip = response.body.trim();
+                        if ip.parse::<std::net::IpAddr>().is_ok() {
+                            eprintln!("ratriyx: direct public IP: {ip}");
+                        } else {
+                            eprintln!(
+                                "ratriyx: direct public IP unavailable (unexpected response)"
+                            );
+                        }
+                    }
+                    Ok(response) => {
+                        eprintln!("ratriyx: direct IP check returned HTTP {}", response.status)
+                    }
+                    Err(err) => eprintln!(
+                        "ratriyx: direct IP check failed: {}",
+                        diagnostics::net_error_text(&err)
+                    ),
+                }
+            }
             if opencode {
                 for note in route::opencode_boundary_notes() {
                     eprintln!("ratriyx: {note}");
@@ -95,6 +131,11 @@ pub fn run(cfg: &Config, options: RunOptions<'_>) -> Result<i32> {
 }
 
 pub fn env(cfg: &Config, shell_kind: ShellKind, mode: Mode, session: &str) -> Result<i32> {
+    if mode == Mode::Tor {
+        return Err(Error::Usage(
+            "a shell environment cannot own an ephemeral embedded proxy; use `ratriyx run --mode tor -- <program>` instead".into(),
+        ));
+    }
     let dir = shell::require_state_dir()?;
     shell::ensure_snapshot_for(&dir, shell_kind, session)?;
     let plan = route::mode_env(mode, &cfg.proxy_url());
@@ -118,4 +159,17 @@ pub fn off(shell_kind: ShellKind, session: &str) -> Result<i32> {
         eprintln!("ratriyx: no snapshot found; unsetting proxy variables instead");
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tor_shell_environment_refuses_before_creating_state() {
+        let result = env(&Config::default(), ShellKind::PowerShell, Mode::Tor, "test");
+        let error = result.expect_err("an ephemeral proxy cannot survive a shell snippet");
+        assert!(error.to_string().contains("ratriyx run"));
+        assert_eq!(error.exit_code(), 2);
+    }
 }

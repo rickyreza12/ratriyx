@@ -24,14 +24,14 @@ its acceptance checks are demonstrated. No release dates are promised.
   new exits or provider-limit changes.
 
 **Still missing:** tested OS-enforced process-tree isolation, comprehensive
-Windows desktop settings acceptance, complete Privoxy-free setup, and
-end-to-end runtime validation on standalone Linux and macOS.
+Windows desktop settings acceptance, fresh clean-install verification of the
+Tor-only setup, and end-to-end runtime validation on standalone Linux and macOS.
 
 ## P0. Secure the v0.4 release path
 
 1. Keep default-branch source and README aligned with the published crate.
    Validate a clean `cargo install ratriyx --locked` in a disposable
-   environment, then confirm the binary reports `0.4.0`.
+   environment, then confirm the published crate reports `0.4.1`.
 2. Exercise a fresh Windows PowerShell 5.1 profile and a OneDrive-redirected
    profile, including existing content, migration backups, repeated enable,
    disable, and actual `IsTor=true` checks. Repeat for PowerShell 7.
@@ -78,12 +78,12 @@ preflight, proxy environment variables or a Job Object alone as enforcement.
 end-to-end suite passes. Keep unsupported platforms fail-closed.
 See [strict-routing-v0.4.md](strict-routing-v0.4.md) for the full threat model.
 
-## P1. Complete the Privoxy-independent workflow
+## P1. Validate and extend the Privoxy-independent workflow
 
-- Move the remaining `doctor`, `setup`, `env`, `on`, and recovery paths
-  toward the embedded proxy where appropriate, without silently changing
-  existing installations. Keep the legacy `--privoxy` route as an explicit
-  compatibility option during migration.
+- Windows setup, `doctor`, `status` and recovery now use embedded proxy
+  verification without installing Privoxy. `env` and `on` deliberately refuse
+  Tor mode because detached snippets cannot own a temporary listener. Validate
+  fresh installations and upgrades, keeping explicit legacy `--privoxy` support.
 - Add negative and streaming-protocol tests: malformed HTTP, request bodies,
   chunked transfer, CONNECT teardown, timeouts, cancellation, DNS behavior,
   large payloads, concurrent clients, and controlled resource consumption.

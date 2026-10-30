@@ -33,9 +33,12 @@ Per-process run does not change system settings. Desktop integrations are opt-in
 require --yes, and use a verified foreground proxy. Windows is current-user WinINet,
 not WinHTTP, all protocols, or a firewall. Restore settings with desktop off.
 --strict requires OS enforcement and currently refuses to launch.
-Tor run and ip use an embedded Rust HTTP-to-Tor SOCKS5 proxy by default.
---privoxy opts into the legacy externally managed HTTP proxy. --embedded-proxy is retained.
+Tor run, ip, doctor and status use a temporary embedded Rust HTTP-to-Tor SOCKS5 proxy.
+Windows run restarts installed Ratriyx-managed Tor when its listener is absent.
+--privoxy explicitly selects the historical external HTTP proxy. --embedded-proxy is retained.
 --allow-unverified requires an explicit --privoxy opt-in. Neither path is a leak-proof firewall.
+env/on in Tor mode are refused because their shell cannot own a temporary proxy;
+use ratriyx run --mode tor instead.
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

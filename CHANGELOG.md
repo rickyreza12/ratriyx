@@ -2,6 +2,14 @@
 
 All notable changes to Ratriyx are recorded here.
 
+## Unreleased (after 0.4.1)
+
+- Normal setup, recovery and diagnostics now use Tor plus a temporary embedded Rust HTTP proxy, without installing or starting Privoxy.
+- Windows Tor-mode launches can restart a previously installed managed Tor bundle; initial bootstrap uses bounded retry for transient IsTor transport failures.
+- `status`, `doctor`, `ip` and `run` inspect the embedded route; Tor launches report the verified exit IP when available, and direct launches may report their public IP.
+- Windows child processes use an owned kill-on-close Job Object for lifetime cleanup when assignment succeeds; strict OS network isolation is still unavailable.
+- Tor-mode shell snippets refuse because they cannot own the temporary proxy. Updated Windows setup/OpenCode docs and the opt-in live test.
+
 ## 0.4.1 (2026-10-28)
 
 - Documentation and CI maintenance release to refresh the README displayed on crates.io.

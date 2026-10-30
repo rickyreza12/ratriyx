@@ -1,4 +1,4 @@
-//! Ratriyx-managed Tor and Privoxy on Windows (M005-M007).
+//! Ratriyx-managed Tor on Windows, with legacy Privoxy removal helpers.
 //!
 //! When no healthy existing installation is found, Ratriyx downloads pinned
 //! official artifacts, writes Ratriyx-owned loopback-only configuration, and
@@ -7,7 +7,9 @@
 //! existing configuration.
 
 use crate::domain::error::{Error, Result};
+use crate::infrastructure::config::Config;
 use crate::infrastructure::fsutil::io_err;
+#[cfg(test)]
 use crate::infrastructure::service::Listener;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,6 +45,116 @@ pub fn torrc_text(data_dir: &Path, socks_port: u16, control_port: u16) -> String
     )
 }
 
+/// Reuse a live Tor SOCKS5 listener or start the previously installed,
+/// Ratriyx-owned Tor bundle. An ordinary run never downloads software.
+#[cfg(windows)]
+pub fn ensure_managed_tor(cfg: &Config) -> Result<()> {
+    use crate::infrastructure::{network, shell};
+
+    let addr = cfg.tor_socks_addr();
+    if network::socks5_greeting(&addr).is_ok() {
+        return Ok(());
+    }
+    let base = managed_base().ok_or_else(|| {
+        Error::Config("LOCALAPPDATA is unavailable; cannot find Ratriyx-managed Tor".into())
+    })?;
+    let tor_dir = base.join("tor");
+    let exe = tor_dir.join("Tor").join("tor.exe");
+    let torrc = tor_dir.join("torrc");
+    if !exe.is_file() || !torrc.is_file() {
+        return Err(Error::Verification(
+            "Tor SOCKS5 is unavailable and managed Tor is not installed; run `ratriyx setup --install --yes`".into(),
+        ));
+    }
+    let data_dir = tor_dir.join("Data");
+    let expected = torrc_text(&data_dir, cfg.tor_socks_port, cfg.tor_control_port);
+    let actual = fs::read_to_string(&torrc).map_err(io_err)?;
+    if actual != expected || cfg.tor_socks_host != "127.0.0.1" {
+        return Err(Error::Verification(
+            "managed Tor configuration differs from this Ratriyx profile; refusing to overwrite it"
+                .into(),
+        ));
+    }
+    let socks_socket: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|_| Error::Config("invalid Tor SOCKS5 address".into()))?;
+    if std::net::TcpListener::bind(socks_socket).is_err() {
+        return Err(Error::Verification(format!(
+            "Tor port {addr} is occupied by a listener that failed the SOCKS5 handshake"
+        )));
+    }
+    let torrc_arg = torrc.to_string_lossy().to_string();
+    let check = Command::new(&exe)
+        .args(["-f", &torrc_arg, "--verify-config"])
+        .output()
+        .map_err(|e| Error::Io(format!("cannot verify managed Tor config: {e}")))?;
+    if !check.status.success() {
+        return Err(Error::Verification(format!(
+            "managed Tor rejected its configuration: {}",
+            check.status
+        )));
+    }
+    let state = shell::require_state_dir()?;
+    let pid = pid_path(&state, "tor");
+    let log = state.join("managed-tor-stderr.log");
+    eprintln!("ratriyx: starting installed managed Tor; waiting for SOCKS5 and bootstrap");
+    let mut child = spawn_tracked_logged(&exe, &["-f", &torrc_arg], &pid, &log)?;
+    let result = wait_for_socks_with_child(&addr, 60, &mut child, &log, &log)
+        .and_then(|_| wait_for_bootstrap_with_child(&mut child, &log, 180))
+        .and_then(|_| verify_new_tor_route(cfg, socks_socket));
+    if let Err(error) = result {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(&pid);
+        return Err(error);
+    }
+    eprintln!("ratriyx: managed Tor bootstrap and embedded IsTor verification complete");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn retryable_tor_warmup_failure(reason: &str) -> bool {
+    reason.contains("connection refused")
+        || reason.contains("timed out")
+        || reason.contains("empty reply")
+}
+
+/// Bootstrap reaching 100% can precede usable circuits by a few seconds.
+/// Retry only transient transport failures and only for a newly started Tor
+/// process. Each check still requires IsTor=true through the embedded proxy.
+#[cfg(windows)]
+fn verify_new_tor_route(cfg: &Config, socks: std::net::SocketAddr) -> Result<()> {
+    let proxy = crate::infrastructure::embedded_proxy::EmbeddedProxy::start(socks)?;
+    let mut probe_cfg = cfg.clone();
+    probe_cfg.proxy_host = proxy.address().ip().to_string();
+    probe_cfg.proxy_port = proxy.address().port();
+    for attempt in 1..=4 {
+        match crate::interface::diagnostics::verify_tor_exit_ip(&probe_cfg, 12) {
+            Ok(exit) => {
+                eprintln!(
+                    "ratriyx: fresh Tor route verified (IsTor=true{})",
+                    exit.map(|ip| format!(", exit {ip}")).unwrap_or_default()
+                );
+                return Ok(());
+            }
+            Err(reason) if attempt < 4 && retryable_tor_warmup_failure(&reason) => {
+                eprintln!(
+                    "ratriyx: Tor bootstrap completed but route is still warming up ({reason}); checking again ({attempt}/4)"
+                );
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+            Err(reason) => {
+                return Err(Error::Verification(format!(
+                    "managed Tor bootstrapped but embedded IsTor verification failed: {reason}"
+                )));
+            }
+        }
+    }
+    Err(Error::Verification(
+        "Tor route verification attempts exhausted".into(),
+    ))
+}
+
 /// Tor parses quoted paths with C-style escapes. Native Windows
 /// backslashes such as \\U are not valid torrc escapes, so convert separators
 /// to forward slashes on Windows. Keep POSIX paths unchanged.
@@ -68,6 +180,7 @@ pub fn privoxy_conf_text(proxy_port: u16, tor_socks: &str) -> String {
 }
 
 /// True when no listener owns `port`. Callers refuse managed starts otherwise.
+#[cfg(test)]
 pub fn port_free(listeners: &[Listener], port: u16) -> bool {
     crate::infrastructure::service::find_listener(listeners, port).is_none()
 }
@@ -354,6 +467,7 @@ pub fn wait_for_bootstrap_with_child(
     }
 }
 
+#[cfg(all(test, not(windows)))]
 pub fn spawn_tracked(exe: &Path, args: &[&str], pid_file: &Path) -> Result<u32> {
     if let Some(parent) = pid_file.parent() {
         if !parent.as_os_str().is_empty() {
@@ -381,6 +495,8 @@ pub fn spawn_tracked_logged(
     pid_file: &Path,
     log_path: &Path,
 ) -> Result<std::process::Child> {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
     if let Some(parent) = pid_file.parent() {
         fs::create_dir_all(parent).map_err(io_err)?;
     }
@@ -394,11 +510,15 @@ pub fn spawn_tracked_logged(
         .open(log_path)
         .map_err(io_err)?;
     let stdout = log.try_clone().map_err(io_err)?;
-    let mut child = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout))
-        .stderr(std::process::Stdio::from(log))
+        .stderr(std::process::Stdio::from(log));
+    #[cfg(windows)]
+    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    let mut child = command
         .spawn()
         .map_err(|e| Error::Io(format!("cannot start {}: {e}", exe.display())))?;
     if let Err(err) = fs::write(pid_file, child.id().to_string()) {
@@ -715,6 +835,23 @@ Privoxy (remove only) Privoxy.Privoxy Unknown 4.1.0     winget";
             Some(30)
         );
         assert_eq!(bootstrap_percent("Bootstrapped 250% (bad)"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn warmup_retry_only_handles_transient_transport_failures() {
+        assert!(retryable_tor_warmup_failure(
+            "connection refused; the endpoint is not listening"
+        ));
+        assert!(retryable_tor_warmup_failure("timed out"));
+        assert!(retryable_tor_warmup_failure("empty reply"));
+        assert!(!retryable_tor_warmup_failure("IsTor was not true"));
+        assert!(!retryable_tor_warmup_failure(
+            "verification endpoint returned HTTP 429"
+        ));
+        assert!(!retryable_tor_warmup_failure(
+            "TLS certificate verification failed"
+        ));
     }
 
     #[test]

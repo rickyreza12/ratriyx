@@ -1,8 +1,9 @@
-# Embedded HTTP-to-SOCKS5 frontend (experimental v0.4 path)
+# Embedded HTTP-to-SOCKS5 frontend (v0.4 path)
 
-This is the default for `ratriyx run --mode tor` and `ratriyx ip`.
-Other commands still use the legacy Privoxy configuration, and managed setup
-still installs Privoxy. Use `--privoxy` on `run` or `ip` for comparison.
+This is the default for `ratriyx run --mode tor`, `ratriyx ip`, `ratriyx status`
+and Tor-mode `ratriyx doctor`. The newer Tor-only managed setup and recovery
+also use the embedded proxy, without a Privoxy installation. Use `--privoxy`
+on `run` or `ip` only to select an existing legacy proxy.
 It is not an OS-enforced strict network guard or a transparent VPN.
 
 ## Try it without changing your current installation
@@ -52,10 +53,12 @@ proxy environment, or service installation is modified.
 - Proxy environment variables cannot force application plugins or subprocesses
   to use the proxy; direct IP, DNS, UDP, and IPv6 escapes are possible without
   a future OS-level guard. `--strict` still deliberately refuses to launch.
-- `doctor`, `status`, setup, `env`, `on`, and recovery still operate on the
-  configured Privoxy backend. `ip` now uses embedded by default.
+- `env` and `on` refuse Tor mode because a detached shell snippet cannot own
+  and shut down the temporary proxy. Direct mode remains available.
 - The embedded proxy has unit tests with a local synthetic SOCKS5 server.
-  Real Tor end-to-end and adversarial leak tests are separate release gates.
+  Real Tor/OpenCode smoke tests passed on one Windows machine; a fresh Tor-only
+  installation and adversarial leak tests remain separate release gates.
 
-Do not remove Privoxy from the managed install until compatibility, lifecycle
-and strict-routing acceptance tests pass.
+Existing Privoxy installations are left untouched. Explicit legacy flags and
+separately guarded uninstall remain available. Ratriyx cannot reset provider
+quotas or guarantee application-wide network isolation.

@@ -7,12 +7,12 @@
 
 Ratriyx runs on Windows, Linux and macOS. It uses the **C Tor client** and an
 **embedded Rust HTTP-to-SOCKS5 proxy** for ordinary per-process Tor routing.
-Privoxy remains available as a legacy option and is still used by parts of the
-managed setup and diagnostic workflow. No Docker or container runtime is needed.
+Privoxy remains available as an explicit legacy option; ordinary setup and
+diagnostics use the embedded proxy. No Docker or container runtime is needed.
 
-**Current release:** [v0.4.1](https://crates.io/crates/ratriyx/0.4.1)
-(October 28, 2026). This patch release refreshes the crate's README and
-roadmap; the CLI features remain those introduced in v0.4.0.
+**Latest published crate:** [v0.4.1](https://crates.io/crates/ratriyx/0.4.1)
+(October 28, 2026). The repository includes additional unreleased Tor-only
+managed setup and diagnostic improvements. Build from source to use them.
 
 > **Security boundary:** A successful `IsTor=true` check verifies the specific
 > test request. Ratriyx cannot yet guarantee that every connection from an
@@ -32,12 +32,11 @@ ratriyx ip
 ```
 
 Run `ratriyx` interactively for the consent-based first-run setup. On Windows,
-the installer can manage the C Tor bundle and install Privoxy using WinGet.
-It waits for Tor bootstrap and verifies the route before treating it as ready.
-On Linux and macOS, external Tor and legacy Privoxy services may need separate
-installation. The default embedded proxy requires a working local Tor SOCKS5
-listener (normally `127.0.0.1:9050`), but **does not require Privoxy for
-`run --mode tor` or `ip`**.
+the repository's installer manages the C Tor bundle without installing Privoxy.
+It waits for bootstrap and verifies the route before treating it as ready.
+On Linux and macOS, Tor installation and service management may require the
+system package manager. The embedded proxy requires a working local Tor SOCKS5
+listener (normally `127.0.0.1:9050`) and does not require Privoxy.
 
 Setup, configuration changes and removal of managed dependencies require
 explicit approval. See [installation.md](installation.md) and
@@ -133,7 +132,7 @@ settings it does not own.
 
 | Command | Purpose |
 |---|---|
-| `ratriyx doctor [--json]` | Diagnose Tor, legacy forwarding and platform readiness |
+| `ratriyx doctor [--json]` | Diagnose Tor SOCKS5, embedded forwarding and platform readiness |
 | `ratriyx ip [--privoxy]` | Compare direct IP, Tor exit and verified `IsTor` status |
 | `ratriyx privacy check [--json]` | Report verified routing evidence and remaining privacy risks |
 | `ratriyx run --mode tor -- PROGRAM` | Run a proxy-aware application through the embedded frontend |
@@ -169,7 +168,7 @@ The full threat model is in [security.md](docs/security.md) and
 
 | Platform | Evidence and current boundary |
 |---|---|
-| Native Windows | Managed Tor/Privoxy setup and embedded-proxy `IsTor=true` verified on a Windows machine. The redirected PowerShell profile fix has automated tests, but real-user migration and other desktop settings still need systematic live regression coverage. |
+| Native Windows | Managed Tor restart and embedded-proxy `IsTor=true` verified on a Windows machine, along with OpenCode version launches in Tor and direct mode. A clean Tor-only installation and real-user desktop-settings migration still need systematic live regression coverage. |
 | Ubuntu on WSL2 | Tested development target. Windows executables invoked across WSL remain a separate, unverified boundary. |
 | Plain Linux | Code paths implemented; end-to-end platform acceptance remains incomplete. |
 | macOS | Code paths implemented; end-to-end macOS runtime acceptance remains incomplete. |

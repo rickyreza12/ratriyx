@@ -33,7 +33,7 @@ pub fn install_header() {
         "  {}",
         accent("====================================", "2", color)
     );
-    eprintln!("  Tor + Privoxy  |  local-only proxies");
+    eprintln!("  Tor + embedded Rust proxy  |  loopback-only HTTP proxy");
     eprintln!(
         "  {}",
         accent("No changes to global Windows proxy settings", "2", color)

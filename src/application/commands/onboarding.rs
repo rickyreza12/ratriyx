@@ -23,7 +23,7 @@ fn remember(path: &Path, choice: &str) -> Result<()> {
 /// Only an explicit "y" or "yes" authorizes dependency installation.
 fn ask<R: BufRead, W: Write>(reader: &mut R, writer: &mut W) -> Result<bool> {
     writer
-        .write_all(b"Install and configure Tor + Privoxy now? [y/N]: ")
+        .write_all(b"Install and configure managed Tor now? [y/N]: ")
         .map_err(fsutil::io_err)?;
     writer.flush().map_err(fsutil::io_err)?;
     let mut response = String::new();
@@ -51,12 +51,19 @@ pub fn run(cfg: &Config) -> Result<i32> {
         "  Tor on PATH: {}",
         if facts.tor_installed { "yes" } else { "no" }
     );
-    say!(
-        "  Privoxy on PATH: {}",
-        if facts.privoxy_installed { "yes" } else { "no" }
-    );
-
-    if diagnostics::verify_route_with_timeout(cfg, 5).is_none() {
+    let already_verified = (|| -> Result<bool> {
+        let socks = cfg
+            .tor_socks_addr()
+            .parse()
+            .map_err(|_| Error::Config("invalid Tor SOCKS5 socket address".into()))?;
+        let proxy = crate::infrastructure::embedded_proxy::EmbeddedProxy::start(socks)?;
+        let mut probe_cfg = cfg.clone();
+        probe_cfg.proxy_host = proxy.address().ip().to_string();
+        probe_cfg.proxy_port = proxy.address().port();
+        Ok(diagnostics::verify_route_with_timeout(&probe_cfg, 5).is_none())
+    })()
+    .unwrap_or(false);
+    if already_verified {
         remember(&marker, "configured\n")?;
         say!("Tor routing already verified (IsTor true); nothing to install.");
         say!("Run 'ratriyx doctor' or 'ratriyx ip' to inspect your route.");

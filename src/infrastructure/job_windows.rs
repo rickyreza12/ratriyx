@@ -1,19 +1,22 @@
-//! Windows Job Object lifecycle for future strict application launch.
+//! Windows Job Object lifecycle for child cleanup and future strict launch.
 //!
-//! Empty-job preflight only. No process is assigned by the public CLI.
+//! Ordinary launches attach a child after spawning it. This ensures Windows
+//! closes its job descendants if Ratriyx exits, but is not a network guard.
 //! JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE ensures the kernel terminates job members
 //! when the final handle closes. It does NOT enforce proxy routing by itself.
 //!
-//! Future launcher must create suspended process, assign it before ResumeThread,
-//! refuse breakaway, and hold both job and WFP guard for the child lifetime.
+//! Strict launch still needs suspended creation and OS network enforcement.
 use crate::domain::error::{Error, Result};
 use std::ffi::c_void;
 use std::marker::PhantomData;
+use std::os::windows::io::AsRawHandle;
+use std::process::Child;
 use std::ptr::null;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
-    CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
 pub struct WindowsJob {
@@ -48,12 +51,23 @@ impl WindowsJob {
         }
         Ok(object)
     }
+
+    pub fn attach(child: &Child) -> Result<Self> {
+        let job = Self::new_empty()?;
+        // SAFETY: The Rust Child owns a live Windows process HANDLE. The job
+        // owns an anonymous kernel handle configured with kill-on-close.
+        let ok = unsafe { AssignProcessToJobObject(job.handle, child.as_raw_handle() as HANDLE) };
+        if ok == 0 {
+            return Err(last_error("AssignProcessToJobObject"));
+        }
+        Ok(job)
+    }
 }
 
 impl Drop for WindowsJob {
     fn drop(&mut self) {
-        // SAFETY: handle returned by successful CreateJobObjectW. The future
-        // child-launch path must hold this handle until it intentionally exits.
+        // SAFETY: handle returned by successful CreateJobObjectW. The caller
+        // holds the handle until the routed child exits or the parent closes.
         unsafe { CloseHandle(self.handle) };
     }
 }
@@ -61,9 +75,7 @@ impl Drop for WindowsJob {
 fn last_error(operation: &str) -> Error {
     // SAFETY: reads the thread-local last error immediately after API failure.
     let code = unsafe { GetLastError() };
-    Error::Unsupported(format!(
-        "Windows Job Object {operation} failed: {code}; strict launch unavailable"
-    ))
+    Error::Unsupported(format!("Windows Job Object {operation} failed: {code}"))
 }
 
 /// Creates an EMPTY temporary job, configures kill-on-close, then destroys it.

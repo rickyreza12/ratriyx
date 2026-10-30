@@ -8,10 +8,9 @@ launch** on every OS until a tested enforcement backend exists. Ordinary
 ## Separate concerns
 
 1. **Transport:** C Tor today, optional embedded Arti later.
-2. **Proxy frontend:** The embedded Rust HTTP/1.1 forwarding proxy with CONNECT
-   is now the default for `run --mode tor` and `ip`. It forwards hostnames
-   via SOCKS5 to C Tor. Privoxy remains an optional legacy frontend and is
-   still used by portions of the managed setup and diagnostics.
+2. **Proxy frontend:** Ratriyx now uses an embedded Rust HTTP/1.1 forward proxy
+   with CONNECT support and remote SOCKS5 hostname resolution. Normal setup no
+   longer installs Privoxy; explicit legacy flags and removal are retained.
 3. **Network enforcement:** OS-level isolation of all traffic from the protected
    application and descendants. Independent of the selected proxy and Tor backend.
 4. **Circuit rotation:** optional Tor NEWNYM control. Independent from enforcement;
@@ -161,9 +160,8 @@ application must never start under the strict label before rules are verified.
 3. Windows: implement and acceptance-test the WFP guard, scoped rule cleanup,
    process coverage and recovery; only then enable strict operation.
 4. Linux/macOS: separate OS backends with their own acceptance gates.
-5. **Done for `run` and `ip`:** embedded Rust HTTP-to-SOCKS5 is the default;
-   retain C Tor and legacy Privoxy compatibility while expanding HTTP/CONNECT
-   acceptance and removing remaining setup dependencies.
+5. **Done:** Use the embedded Rust proxy as the default, with ordinary HTTP
+   and CONNECT tests; keep legacy Privoxy only for explicit compatibility.
 6. Evaluate Arti integration independently; no dependency on strict readiness.
 
 ## Not in scope
