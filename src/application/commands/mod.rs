@@ -1,5 +1,6 @@
 mod desktop;
 mod diagnose;
+mod gateway;
 mod launch;
 mod maintenance;
 mod onboarding;
@@ -25,6 +26,17 @@ pub fn dispatch(command: Command) -> Result<i32> {
     match command {
         Command::Doctor { json, mode, app } => diagnose::doctor(&cfg, json, mode, app.as_deref()),
         Command::Ip { privoxy } => diagnose::ip(&cfg, privoxy),
+        Command::GatewayCheck {
+            socks,
+            different_from,
+        } => gateway::check(&socks, different_from),
+        Command::GatewayRun {
+            socks,
+            different_from,
+            opencode,
+            program,
+            args,
+        } => gateway::run(&socks, different_from, opencode, &program, &args),
         Command::Status => diagnose::status(&cfg),
         Command::PrivacyCheck { json } => privacy::check(&cfg, json),
         Command::DesktopServe { port } => desktop::serve(&cfg, port),

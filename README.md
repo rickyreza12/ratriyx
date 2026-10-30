@@ -134,6 +134,8 @@ settings it does not own.
 |---|---|
 | `ratriyx doctor [--json]` | Diagnose Tor SOCKS5, embedded forwarding and platform readiness |
 | `ratriyx ip [--privoxy]` | Compare direct IP, Tor exit and verified `IsTor` status |
+| `ratriyx gateway check --socks 127.0.0.1:1080` | Verify a separately operated SOCKS5 gateway has a different public IP |
+| `ratriyx gateway run --socks 127.0.0.1:1080 -- PROGRAM` | Run a proxy-aware child only after gateway IP verification |
 | `ratriyx privacy check [--json]` | Report verified routing evidence and remaining privacy risks |
 | `ratriyx run --mode tor -- PROGRAM` | Run a proxy-aware application through the embedded frontend |
 | `ratriyx desktop serve --port 8119` | Start a foreground loopback HTTP proxy |
@@ -146,6 +148,13 @@ settings it does not own.
 | `ratriyx uninstall` | Interactive, ownership-aware settings and dependency removal |
 
 Run `ratriyx --help` for the complete command and option list.
+
+For a third public egress IP, run an SSH dynamic SOCKS5 tunnel through a VPS
+you control, then use `ratriyx gateway check` or `gateway run`. Ratriyx
+requires the gateway to differ from the direct public IP and supports
+`--different-from IP` to refuse a known previous exit as well. See
+[alternate gateway guide](docs/alternate-gateway.md). This does not reset
+OpenCode provider limits or provide OS-wide network isolation.
 
 ## What Ratriyx does not guarantee
 

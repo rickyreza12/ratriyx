@@ -7,6 +7,9 @@ ratriyx: per-process privacy routing through Tor (Linux, Windows, macOS)
 USAGE:
   ratriyx doctor [--json] [--mode direct|tor] [--app opencode]
   ratriyx ip [--privoxy]
+  ratriyx gateway check --socks 127.0.0.1:1080 [--different-from IP]
+  ratriyx gateway run --socks 127.0.0.1:1080 [--different-from IP] -- <program> [args...]
+  ratriyx gateway run --socks 127.0.0.1:1080 [--different-from IP] --opencode [-- args...]
   ratriyx status
   ratriyx privacy check [--json]
   ratriyx desktop serve [--port 8119]
@@ -39,6 +42,8 @@ Windows run restarts installed Ratriyx-managed Tor when its listener is absent.
 --allow-unverified requires an explicit --privoxy opt-in. Neither path is a leak-proof firewall.
 env/on in Tor mode are refused because their shell cannot own a temporary proxy;
 use ratriyx run --mode tor instead.
+Gateway mode requires a separately operated loopback SOCKS5 listener (e.g. SSH -D).
+It refuses unverified or unchanged egress IP; it cannot reset provider quotas.
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +85,17 @@ pub enum Command {
     },
     Ip {
         privoxy: bool,
+    },
+    GatewayCheck {
+        socks: String,
+        different_from: Option<std::net::IpAddr>,
+    },
+    GatewayRun {
+        socks: String,
+        different_from: Option<std::net::IpAddr>,
+        opencode: bool,
+        program: String,
+        args: Vec<String>,
     },
     Status,
     PrivacyCheck {
@@ -239,6 +255,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             Some("--privoxy") if s.take().is_none() => Ok(Command::Ip { privoxy: true }),
             Some(other) => Err(unknown("ip", other)),
         },
+        "gateway" => parse_gateway(&mut s),
         "status" => {
             no_extra_args("status", &mut s)?;
             Ok(Command::Status)
@@ -488,6 +505,61 @@ fn parse_yes(s: &mut Scan, command: &str) -> Result<bool> {
     Ok(yes)
 }
 
+fn parse_gateway(s: &mut Scan) -> Result<Command> {
+    let action = s
+        .take()
+        .ok_or_else(|| Error::Usage("gateway needs check or run".into()))?;
+    if action != "check" && action != "run" {
+        return Err(Error::Usage("gateway supports only check or run".into()));
+    }
+    let (mut socks, mut different_from, mut opencode) = (None, None, false);
+    loop {
+        match s.take() {
+            None => break,
+            Some("--") if action == "run" => break,
+            Some("--socks") if socks.is_none() => {
+                socks = Some(s.value("--socks")?.to_string());
+            }
+            Some("--different-from") if different_from.is_none() => {
+                different_from = Some(s.value("--different-from")?.parse().map_err(|_| {
+                    Error::Usage("--different-from must be a valid IPv4 or IPv6 address".into())
+                })?);
+            }
+            Some("--opencode") if action == "run" => opencode = true,
+            Some(arg) if action == "run" && opencode && arg == "--" => break,
+            Some(other) => return Err(unknown("gateway", other)),
+        }
+    }
+    let socks = socks.ok_or_else(|| Error::Usage("gateway requires --socks HOST:PORT".into()))?;
+    if action == "check" {
+        return Ok(Command::GatewayCheck {
+            socks,
+            different_from,
+        });
+    }
+    let rest = s.rest();
+    let (program, args) = if opencode {
+        let args = if rest.first().map(String::as_str) == Some("opencode") {
+            rest[1..].to_vec()
+        } else {
+            rest.to_vec()
+        };
+        ("opencode".to_string(), args)
+    } else {
+        let (program, args) = rest
+            .split_first()
+            .ok_or_else(|| Error::Usage("gateway run needs -- <program> [args...]".into()))?;
+        (program.clone(), args.to_vec())
+    };
+    Ok(Command::GatewayRun {
+        socks,
+        different_from,
+        opencode,
+        program,
+        args,
+    })
+}
+
 fn parse_run(s: &mut Scan) -> Result<Command> {
     let (
         mut mode,
@@ -638,6 +710,55 @@ mod tests {
     #[test]
     fn no_arguments_shows_help() {
         assert_eq!(parse(&[]).unwrap(), Command::Help);
+    }
+
+    #[test]
+    fn gateway_check_and_run_have_explicit_socks_and_ip_guard() {
+        assert_eq!(
+            parse(&argv(&[
+                "gateway",
+                "check",
+                "--socks",
+                "127.0.0.1:1080",
+                "--different-from",
+                "203.0.113.10"
+            ]))
+            .unwrap(),
+            Command::GatewayCheck {
+                socks: "127.0.0.1:1080".into(),
+                different_from: Some("203.0.113.10".parse().unwrap()),
+            }
+        );
+        assert_eq!(
+            parse(&argv(&[
+                "gateway",
+                "run",
+                "--socks",
+                "127.0.0.1:1080",
+                "--opencode",
+                "--",
+                "--version"
+            ]))
+            .unwrap(),
+            Command::GatewayRun {
+                socks: "127.0.0.1:1080".into(),
+                different_from: None,
+                opencode: true,
+                program: "opencode".into(),
+                args: vec!["--version".into()],
+            }
+        );
+        assert!(parse(&argv(&["gateway", "check"])).is_err());
+        assert!(parse(&argv(&["gateway", "run", "--socks", "127.0.0.1:1080"])).is_err());
+        assert!(parse(&argv(&[
+            "gateway",
+            "check",
+            "--socks",
+            "127.0.0.1:1080",
+            "--different-from",
+            "bad"
+        ]))
+        .is_err());
     }
 
     #[test]

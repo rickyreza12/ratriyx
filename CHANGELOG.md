@@ -4,6 +4,7 @@ All notable changes to Ratriyx are recorded here.
 
 ## Unreleased (after 0.4.1)
 
+- Added opt-in `gateway check/run --socks 127.0.0.1:PORT` for a separately operated local SOCKS5 endpoint (for example an SSH tunnel to an owned VPS); verified egress must differ from direct and an optional excluded IP, and failures refuse to launch.
 - Normal setup, recovery and diagnostics now use Tor plus a temporary embedded Rust HTTP proxy, without installing or starting Privoxy.
 - Windows Tor-mode launches can restart a previously installed managed Tor bundle; initial bootstrap uses bounded retry for transient IsTor transport failures.
 - `status`, `doctor`, `ip` and `run` inspect the embedded route; Tor launches report the verified exit IP when available, and direct launches may report their public IP.
